@@ -1,36 +1,33 @@
 # ============================================================================
-# Stage 1: Build Go API
+# Stage 1: Build Go API (native cross-compile, no QEMU needed)
 # ============================================================================
-FROM golang:1.25-alpine AS api-builder
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS api-builder
 
 RUN apk add --no-cache git ca-certificates
 
 WORKDIR /src/apps/api
 
-# Cache dependencies
 COPY apps/api/go.mod apps/api/go.sum ./
 RUN go mod download
 
-# Build
 COPY apps/api/ ./
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -trimpath \
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
     -ldflags "-s -w -X github.com/sailboxhq/sailbox/apps/api/internal/version.Version=${VERSION}" \
     -o /usr/local/bin/sailbox-api ./cmd/server
 
 # ============================================================================
-# Stage 2: Build frontend
+# Stage 2: Build frontend (platform-independent, build once)
 # ============================================================================
-FROM oven/bun:1-alpine AS web-builder
+FROM --platform=$BUILDPLATFORM oven/bun:1-alpine AS web-builder
 
 WORKDIR /src
 
-# Install root deps (workspace)
 COPY package.json bunfig.toml ./
 COPY apps/web/package.json apps/web/package.json
 RUN bun install --frozen-lockfile
 
-# Build
 COPY apps/web/ apps/web/
 RUN cd apps/web && bun run build
 
@@ -42,17 +39,10 @@ FROM alpine:3.21
 RUN apk add --no-cache ca-certificates tzdata curl \
     && addgroup -S sailbox && adduser -S sailbox -G sailbox
 
-# API binary
 COPY --from=api-builder /usr/local/bin/sailbox-api /usr/local/bin/sailbox-api
-
-# Frontend static files
 COPY --from=web-builder /src/apps/web/dist /srv/web
-
-# Caddy for reverse proxy (static files + API proxy)
 COPY --from=caddy:2-alpine /usr/bin/caddy /usr/local/bin/caddy
 COPY deploy/Caddyfile /etc/caddy/Caddyfile
-
-# Entrypoint
 COPY deploy/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
