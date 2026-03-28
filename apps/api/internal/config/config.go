@@ -13,7 +13,6 @@ import (
 type Config struct {
 	Server   ServerConfig
 	Database DatabaseConfig
-	Valkey   ValkeyConfig
 	K8s      K8sConfig
 	Auth     AuthConfig
 }
@@ -32,10 +31,6 @@ type DatabaseConfig struct {
 	ConnMaxLifetime time.Duration
 }
 
-type ValkeyConfig struct {
-	URL string
-}
-
 type K8sConfig struct {
 	Kubeconfig string
 	InCluster  bool
@@ -45,6 +40,7 @@ type AuthConfig struct {
 	JWTSecret     string
 	TokenExpiry   time.Duration
 	RefreshExpiry time.Duration
+	SetupSecret   string // Required for unauthenticated setup operations (e.g. restore)
 }
 
 // Load reads configuration from .env file (if present) and environment variables.
@@ -64,9 +60,6 @@ func Load() (*Config, error) {
 			MaxIdleConns:    envInt("DATABASE_MAX_IDLE_CONNS", 5),
 			ConnMaxLifetime: envDuration("DATABASE_CONN_MAX_LIFETIME", 5*time.Minute),
 		},
-		Valkey: ValkeyConfig{
-			URL: envStr("VALKEY_URL", "redis://localhost:6380/0"),
-		},
 		K8s: K8sConfig{
 			Kubeconfig: envStr("KUBECONFIG", ""),
 			InCluster:  envBool("K8S_IN_CLUSTER", false),
@@ -75,6 +68,7 @@ func Load() (*Config, error) {
 			JWTSecret:     envStr("JWT_SECRET", ""),
 			TokenExpiry:   envDuration("JWT_TOKEN_EXPIRY", 24*time.Hour),
 			RefreshExpiry: envDuration("JWT_REFRESH_EXPIRY", 7*24*time.Hour),
+			SetupSecret:   envStr("SETUP_SECRET", ""),
 		},
 	}
 
@@ -88,6 +82,9 @@ func Load() (*Config, error) {
 func (c *Config) validate() error {
 	if c.Auth.JWTSecret == "" {
 		return fmt.Errorf("JWT_SECRET is required")
+	}
+	if c.Auth.SetupSecret == "" {
+		return fmt.Errorf("SETUP_SECRET is required")
 	}
 	return nil
 }

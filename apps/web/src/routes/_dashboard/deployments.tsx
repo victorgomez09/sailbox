@@ -25,10 +25,15 @@ export const Route = createFileRoute("/_dashboard/deployments")({
 function DeploymentsPage() {
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState<string>("");
-  const { data: queueData } = useDeploymentQueue();
-  const { data: allData, isLoading } = useAllDeployments(page, 20, statusFilter || undefined);
+  const { data: queueData, isError: queueError } = useDeploymentQueue();
+  const {
+    data: allData,
+    isLoading,
+    isError: allError,
+  } = useAllDeployments(page, 20, statusFilter || undefined);
 
   const queue = queueData?.items ?? [];
+  const queueTotal = queueData?.pagination?.total ?? queue.length;
   const all = allData?.items ?? [];
   const pagination = allData?.pagination;
   const totalPages = pagination ? Math.ceil(pagination.total / pagination.per_page) : 1;
@@ -50,16 +55,22 @@ function DeploymentsPage() {
           <TabsTrigger value="queue" className="gap-1.5">
             <Loader2 className="h-3.5 w-3.5" />
             Queue
-            {queue.length > 0 && (
+            {queueTotal > 0 && (
               <Badge variant="warning" className="ml-1 h-5 px-1.5 text-xs">
-                {queue.length}
+                {queueTotal}
               </Badge>
             )}
           </TabsTrigger>
         </TabsList>
 
         <TabsContent value="queue" className="mt-4">
-          {queue.length === 0 ? (
+          {queueError ? (
+            <Card>
+              <CardContent className="flex flex-col items-center justify-center py-10 text-destructive">
+                <p className="text-sm">Failed to load deployment queue.</p>
+              </CardContent>
+            </Card>
+          ) : queue.length === 0 ? (
             <Card>
               <CardContent className="flex flex-col items-center justify-center py-10 text-muted-foreground">
                 <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
@@ -104,7 +115,13 @@ function DeploymentsPage() {
             </Select>
           </div>
 
-          {isLoading ? (
+          {allError ? (
+            <Card>
+              <CardContent className="flex flex-col items-center justify-center py-10 text-destructive">
+                <p className="text-sm">Failed to load deployments.</p>
+              </CardContent>
+            </Card>
+          ) : isLoading ? (
             <div className="flex justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>

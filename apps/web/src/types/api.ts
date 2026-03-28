@@ -139,6 +139,7 @@ export interface ContainerStatus {
 
 export interface PodInfo {
   name: string;
+  namespace: string;
   phase: string;
   node: string;
   ip: string;
@@ -549,8 +550,7 @@ export interface HelmRelease {
   name: string;
   namespace: string;
   chart: string;
-  version: string;
-  app_version: string;
+  revision: string;
   status: string;
   updated: string;
 }

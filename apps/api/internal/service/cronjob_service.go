@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -79,7 +80,10 @@ func (s *CronJobService) Create(ctx context.Context, input CreateCronJobInput) (
 	if cj.SourceType == "" {
 		cj.SourceType = model.SourceImage
 	}
-	if cj.Image == "" && cj.SourceType == model.SourceImage {
+	if cj.SourceType == model.SourceGit {
+		return nil, fmt.Errorf("CronJobs do not support git source type — use a pre-built container image instead")
+	}
+	if cj.Image == "" {
 		cj.Image = "busybox:latest"
 	}
 	if cj.GitBranch == "" {
@@ -108,9 +112,12 @@ func (s *CronJobService) Create(ctx context.Context, input CreateCronJobInput) (
 		return nil, err
 	}
 
-	// Create K8s CronJob
-	if err := s.orch.CreateCronJob(ctx, cj); err != nil {
+	// Create K8s CronJob with merged env (project base + cronjob override)
+	k8sCJ := s.withMergedEnv(cj, project.EnvVars)
+	if err := s.orch.CreateCronJob(ctx, k8sCJ); err != nil {
 		s.logger.Error("failed to create K8s CronJob", slog.Any("error", err), slog.String("name", cj.Name))
+		_ = s.store.CronJobs().Delete(ctx, cj.ID)
+		return nil, fmt.Errorf("failed to create K8s CronJob: %w", err)
 	}
 
 	s.logger.Info("cronjob created", slog.String("name", cj.Name), slog.String("schedule", cj.CronExpression))
@@ -183,9 +190,12 @@ func (s *CronJobService) Update(ctx context.Context, id uuid.UUID, input UpdateC
 		return nil, err
 	}
 
-	// Update K8s CronJob
-	if err := s.orch.UpdateCronJob(ctx, cj); err != nil {
+	// Update K8s CronJob with merged env
+	project, _ := s.store.Projects().GetByID(ctx, cj.ProjectID)
+	k8sCJ := s.withMergedEnv(cj, projectEnvOrNil(project))
+	if err := s.orch.UpdateCronJob(ctx, k8sCJ); err != nil {
 		s.logger.Error("failed to update K8s CronJob", slog.Any("error", err), slog.String("name", cj.Name))
+		return nil, fmt.Errorf("failed to update K8s CronJob: %w", err)
 	}
 
 	return cj, nil
@@ -208,6 +218,7 @@ func (s *CronJobService) Delete(ctx context.Context, id uuid.UUID) error {
 	// Delete from K8s
 	if err := s.orch.DeleteCronJob(ctx, cj); err != nil {
 		s.logger.Error("failed to delete K8s CronJob", slog.Any("error", err), slog.String("name", cj.Name))
+		return fmt.Errorf("failed to delete K8s CronJob: %w — delete manually before retrying", err)
 	}
 
 	return s.store.CronJobs().Delete(ctx, id)
@@ -241,9 +252,79 @@ func (s *CronJobService) Trigger(ctx context.Context, id uuid.UUID) (*model.Cron
 	}
 
 	s.logger.Info("cronjob triggered", slog.String("name", cj.Name), slog.String("job", jobName))
+
+	// Watch job completion in background
+	go s.watchJobCompletion(cj, run, jobName)
+
 	return run, nil
+}
+
+func (s *CronJobService) watchJobCompletion(cj *model.CronJob, run *model.CronJobRun, jobName string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			// Timed out — mark as failed
+			now := time.Now()
+			run.Status = model.CronJobRunFailed
+			run.FinishedAt = &now
+			run.Logs += "\nTimed out waiting for completion"
+			_ = s.store.CronJobRuns().Update(context.Background(), run)
+			cj.Status = model.CronJobIdle
+			_ = s.store.CronJobs().Update(context.Background(), cj)
+			return
+		case <-ticker.C:
+			status, err := s.orch.GetJobStatus(ctx, cj, jobName)
+			if err != nil {
+				continue
+			}
+			if status == "succeeded" || status == "failed" {
+				now := time.Now()
+				run.FinishedAt = &now
+				if status == "succeeded" {
+					run.Status = model.CronJobRunSucceeded
+				} else {
+					run.Status = model.CronJobRunFailed
+				}
+				_ = s.store.CronJobRuns().Update(context.Background(), run)
+				cj.Status = model.CronJobIdle
+				_ = s.store.CronJobs().Update(context.Background(), cj)
+				return
+			}
+		}
+	}
 }
 
 func (s *CronJobService) ListRuns(ctx context.Context, cronJobID uuid.UUID, params store.ListParams) ([]model.CronJobRun, int, error) {
 	return s.store.CronJobRuns().ListByCronJob(ctx, cronJobID, params)
+}
+
+// withMergedEnv returns a shallow copy of cj with project env merged in (project as base, cj overrides).
+// The original cj is not modified — safe for DB persistence.
+func (s *CronJobService) withMergedEnv(cj *model.CronJob, projectEnv map[string]string) *model.CronJob {
+	if len(projectEnv) == 0 {
+		return cj
+	}
+	tmp := *cj
+	merged := make(map[string]string)
+	for k, v := range projectEnv {
+		merged[k] = v
+	}
+	for k, v := range cj.EnvVars {
+		merged[k] = v
+	}
+	tmp.EnvVars = merged
+	return &tmp
+}
+
+func projectEnvOrNil(p *model.Project) map[string]string {
+	if p == nil {
+		return nil
+	}
+	return p.EnvVars
 }

@@ -1,6 +1,8 @@
 package v1
 
 import (
+	"sort"
+
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/sailboxhq/sailbox/apps/api/internal/api/middleware"
@@ -108,6 +110,14 @@ func (h *DeployHandler) ListQueue(c *gin.Context) {
 		allDeploys = append(allDeploys, deploys...)
 		totalCount += count
 	}
+
+	// Use actual fetched count as total (avoids mismatch when a bucket exceeds 100)
+	totalCount = len(allDeploys)
+
+	// Sort by created_at descending (newest first) across all status buckets
+	sort.Slice(allDeploys, func(i, j int) bool {
+		return allDeploys[i].CreatedAt.After(allDeploys[j].CreatedAt)
+	})
 
 	// Apply pagination manually
 	start := params.Offset()

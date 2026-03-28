@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -92,12 +93,17 @@ func (s *ProjectService) Create(ctx context.Context, orgID uuid.UUID, input Crea
 	// Create K8s namespace
 	if err := s.orch.CreateNamespace(ctx, project.Namespace); err != nil {
 		s.logger.Error("failed to create K8s namespace", slog.Any("error", err), slog.String("namespace", project.Namespace))
+		// Clean up the DB record — project without a namespace is unusable
+		_ = s.store.Projects().Delete(ctx, project.ID)
+		return nil, fmt.Errorf("failed to create namespace: %w", err)
 	}
 
 	// Create service account in the namespace
 	saName := "sa-" + project.Namespace
 	if err := s.orch.EnsureServiceAccount(ctx, project.Namespace, saName); err != nil {
 		s.logger.Error("failed to ensure service account", slog.Any("error", err), slog.String("namespace", project.Namespace))
+		_ = s.store.Projects().Delete(ctx, project.ID)
+		return nil, fmt.Errorf("failed to create service account: %w", err)
 	}
 	project.ServiceAccount = saName
 	if err := s.store.Projects().Update(ctx, project); err != nil {
@@ -142,10 +148,51 @@ func (s *ProjectService) Update(ctx context.Context, id uuid.UUID, input UpdateP
 
 	// Sync K8s resources if project has a namespace
 	if project.Namespace != "" {
-		// ConfigMap for project env vars
+		// ConfigMap for project env vars + push to running apps
 		if input.EnvVars != nil {
 			if err := s.orch.EnsureConfigMap(ctx, project.Namespace, "project-env", project.EnvVars); err != nil {
 				s.logger.Error("failed to ensure ConfigMap", slog.Any("error", err))
+			}
+			// Push merged env to all apps in this project
+			apps, _, listErr := s.store.Applications().ListByProject(ctx, project.ID, store.ListParams{Page: 1, PerPage: 1000})
+			if listErr != nil {
+				s.logger.Error("failed to list apps for env propagation", slog.Any("error", listErr))
+			} else {
+				for _, app := range apps {
+					merged := make(map[string]string)
+					for k, v := range project.EnvVars {
+						merged[k] = v
+					}
+					for k, v := range app.EnvVars {
+						merged[k] = v
+					}
+					if err := s.orch.UpdateEnvVars(ctx, &app, merged); err != nil {
+						s.logger.Warn("failed to push project env to app",
+							slog.String("app", app.Name), slog.Any("error", err))
+					}
+				}
+			}
+			// Push merged env to all CronJobs in this project (merge at K8s level, don't modify DB)
+			cjs, _, cjListErr := s.store.CronJobs().ListByProject(ctx, project.ID, store.ListParams{Page: 1, PerPage: 1000})
+			if cjListErr != nil {
+				s.logger.Error("failed to list cronjobs for env propagation", slog.Any("error", cjListErr))
+			} else {
+				for i := range cjs {
+					// Build a temporary copy with merged env for K8s, don't persist
+					tmp := cjs[i]
+					merged := make(map[string]string)
+					for k, v := range project.EnvVars {
+						merged[k] = v
+					}
+					for k, v := range tmp.EnvVars {
+						merged[k] = v
+					}
+					tmp.EnvVars = merged
+					if err := s.orch.UpdateCronJob(ctx, &tmp); err != nil {
+						s.logger.Warn("failed to push project env to cronjob",
+							slog.String("cronjob", tmp.Name), slog.Any("error", err))
+					}
+				}
 			}
 		}
 		// ResourceQuota

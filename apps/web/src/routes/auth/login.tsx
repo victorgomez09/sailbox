@@ -157,6 +157,7 @@ function RestoreForm({ onBack }: { onBack: () => void }) {
     access_key: "",
     secret_key: "",
     path: "sailbox-backups",
+    setup_secret: "",
   });
   const [backups, setBackups] = useState<S3BackupFile[]>([]);
   const [selected, setSelected] = useState("");
@@ -190,6 +191,7 @@ function RestoreForm({ onBack }: { onBack: () => void }) {
         access_key: s3.access_key,
         secret_key: s3.secret_key,
         s3_key: selected,
+        setup_secret: s3.setup_secret,
       });
       setStep("done");
       // Wait 3 seconds to show success, then redirect
@@ -282,6 +284,22 @@ function RestoreForm({ onBack }: { onBack: () => void }) {
                   onChange={(e) => setS3({ ...s3, path: e.target.value })}
                   placeholder="sailbox-backups"
                 />
+              </div>
+              <div className="space-y-2">
+                <label htmlFor="setup-secret" className="text-sm font-medium">
+                  Setup Secret
+                </label>
+                <Input
+                  id="setup-secret"
+                  type="password"
+                  value={s3.setup_secret}
+                  onChange={(e) => setS3({ ...s3, setup_secret: e.target.value })}
+                  placeholder="From /opt/sailbox/.env"
+                  required
+                />
+                <p className="text-xs text-muted-foreground">
+                  Found in <code>/opt/sailbox/.env</code> on your server
+                </p>
               </div>
               <Button type="submit" className="w-full" disabled={scan.isPending}>
                 {scan.isPending ? "Scanning..." : "Scan for backups"}

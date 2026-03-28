@@ -53,9 +53,20 @@ func (o *Orchestrator) UpdateTraefikConfig(ctx context.Context, yamlContent stri
 		return fmt.Errorf("create dynamic client: %w", err)
 	}
 
+	// Parse the YAML content — this may be spec-only (from GetTraefikConfig)
+	// or a full object with a "spec:" key
 	var parsed map[string]interface{}
 	if parseErr := sigsyaml.Unmarshal([]byte(yamlContent), &parsed); parseErr != nil {
 		return fmt.Errorf("parse yaml: %w", parseErr)
+	}
+
+	// If the YAML contains a "spec" key, use its value; otherwise treat the
+	// entire parsed content as the spec (since GetTraefikConfig returns spec-only)
+	spec := parsed
+	if s, ok := parsed["spec"]; ok {
+		if specMap, ok := s.(map[string]interface{}); ok {
+			spec = specMap
+		}
 	}
 
 	// Try to update HelmChart CRD first
@@ -64,10 +75,7 @@ func (o *Orchestrator) UpdateTraefikConfig(ctx context.Context, yamlContent stri
 		if existing.Object == nil {
 			return fmt.Errorf("existing HelmChart has nil object")
 		}
-		// Only update spec fields
-		if spec, ok := parsed["spec"]; ok {
-			existing.Object["spec"] = spec
-		}
+		existing.Object["spec"] = spec
 		_, updateErr := dynClient.Resource(helmChartGVR).Namespace("kube-system").Update(ctx, existing, metav1.UpdateOptions{})
 		if updateErr != nil {
 			return fmt.Errorf("update HelmChart: %w", updateErr)
@@ -84,9 +92,7 @@ func (o *Orchestrator) UpdateTraefikConfig(ctx context.Context, yamlContent stri
 		if existing.Object == nil {
 			return fmt.Errorf("existing HelmChartConfig has nil object")
 		}
-		if spec, ok := parsed["spec"]; ok {
-			existing.Object["spec"] = spec
-		}
+		existing.Object["spec"] = spec
 		_, updateErr := dynClient.Resource(helmChartConfigGVR).Namespace("kube-system").Update(ctx, existing, metav1.UpdateOptions{})
 		if updateErr != nil {
 			return fmt.Errorf("update HelmChartConfig: %w", updateErr)

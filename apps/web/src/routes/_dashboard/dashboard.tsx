@@ -106,8 +106,8 @@ export const Route = createFileRoute("/_dashboard/dashboard")({
 
 function DashboardPage() {
   const { data: projects, isLoading } = useProjects();
-  const { data: apps } = useDashboardApps();
-  const { data: databases } = useDashboardDatabases();
+  const { data: apps, isError: appsError } = useDashboardApps();
+  const { data: databases, isError: dbsError } = useDashboardDatabases();
   const { data: cluster } = useClusterMetrics();
   const { data: nodes } = useClusterNodes();
   const { data: pods } = useClusterPods();
@@ -249,7 +249,11 @@ function DashboardPage() {
             </Link>
           </CardHeader>
           <CardContent>
-            {allApps.length === 0 ? (
+            {appsError ? (
+              <p className="py-8 text-center text-sm text-destructive">
+                Failed to load applications
+              </p>
+            ) : allApps.length === 0 ? (
               <p className="py-8 text-center text-sm text-muted-foreground">No applications yet</p>
             ) : (
               <div className="space-y-1">
@@ -282,7 +286,9 @@ function DashboardPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {allDbs.length === 0 ? (
+            {dbsError ? (
+              <p className="py-8 text-center text-sm text-destructive">Failed to load databases</p>
+            ) : allDbs.length === 0 ? (
               <p className="py-8 text-center text-sm text-muted-foreground">No databases yet</p>
             ) : (
               <div className="space-y-1">

@@ -24,6 +24,10 @@ export function useCronJob(id: string) {
     queryKey: cronJobKeys.detail(id),
     queryFn: () => api.get<CronJob>(`/api/v1/cronjobs/${id}`),
     enabled: !!id,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "running" ? 5_000 : false;
+    },
   });
 }
 
@@ -33,6 +37,10 @@ export function useCronJobRuns(id: string) {
     queryFn: () => api.get<PaginatedResponse<CronJobRun>>(`/api/v1/cronjobs/${id}/runs`),
     select: (data) => data.items ?? [],
     enabled: !!id,
+    refetchInterval: (query) => {
+      const items = Array.isArray(query.state.data) ? query.state.data : [];
+      return items.some((r: CronJobRun) => r.status === "running") ? 5_000 : false;
+    },
   });
 }
 
@@ -62,7 +70,8 @@ export function useUpdateCronJob(id: string) {
     onSuccess: () => {
       toast.success("CronJob updated");
       qc.invalidateQueries({ queryKey: cronJobKeys.detail(id) });
-      qc.invalidateQueries({ queryKey: ["cronjobs"] });
+      qc.invalidateQueries({ queryKey: cronJobKeys.all });
+      qc.invalidateQueries({ queryKey: ["projects"] });
     },
     onError: (err: any) => toast.error(err?.detail || "Update failed"),
   });
@@ -89,6 +98,8 @@ export function useTriggerCronJob(id: string) {
       toast.success("CronJob triggered");
       qc.invalidateQueries({ queryKey: cronJobKeys.runs(id) });
       qc.invalidateQueries({ queryKey: cronJobKeys.detail(id) });
+      qc.invalidateQueries({ queryKey: cronJobKeys.all });
+      qc.invalidateQueries({ queryKey: ["projects"] });
     },
     onError: (err: any) => toast.error(err?.detail || "Trigger failed"),
   });

@@ -12,6 +12,7 @@ export function useNodes() {
   return useQuery({
     queryKey: nodeKeys.all,
     queryFn: () => api.get<ServerNode[]>("/api/v1/nodes"),
+    refetchInterval: 15_000,
   });
 }
 

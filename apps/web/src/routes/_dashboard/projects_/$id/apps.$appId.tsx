@@ -64,11 +64,8 @@ function AppDetailPage() {
   if (isLoading) return <LoadingScreen variant="detail" />;
   if (!app) return null;
 
-  // Compute display status
-  const liveStatus =
-    app.status === "running" && appStatus?.phase && appStatus.phase !== "running"
-      ? appStatus.phase
-      : app.status;
+  // Prefer live K8s status when available; fall back to DB status
+  const liveStatus = appStatus?.phase || app.status;
 
   const sourceDescription =
     app.source_type === "image" ? (

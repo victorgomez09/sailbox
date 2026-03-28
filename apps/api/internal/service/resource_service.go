@@ -12,12 +12,15 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/sailboxhq/sailbox/apps/api/internal/apierr"
 	"github.com/sailboxhq/sailbox/apps/api/internal/model"
 	"github.com/sailboxhq/sailbox/apps/api/internal/store"
 )
@@ -212,8 +215,20 @@ type UpdateResourceInput struct {
 	Config   *json.RawMessage `json:"config"`
 }
 
-func (s *ResourceService) Update(ctx context.Context, id uuid.UUID, input UpdateResourceInput) (*model.SharedResource, error) {
+// getOwnedResource fetches a resource and verifies it belongs to the given org.
+func (s *ResourceService) getOwnedResource(ctx context.Context, orgID, id uuid.UUID) (*model.SharedResource, error) {
 	resource, err := s.store.SharedResources().GetByID(ctx, id)
+	if err != nil {
+		return nil, apierr.ErrNotFound.WithDetail("resource not found")
+	}
+	if resource.OrgID != orgID {
+		return nil, apierr.ErrNotFound.WithDetail("resource not found")
+	}
+	return resource, nil
+}
+
+func (s *ResourceService) Update(ctx context.Context, orgID, id uuid.UUID, input UpdateResourceInput) (*model.SharedResource, error) {
+	resource, err := s.getOwnedResource(ctx, orgID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -232,13 +247,63 @@ func (s *ResourceService) Update(ctx context.Context, id uuid.UUID, input Update
 	return resource, nil
 }
 
-func (s *ResourceService) Delete(ctx context.Context, id uuid.UUID) error {
+func (s *ResourceService) Delete(ctx context.Context, orgID, id uuid.UUID) error {
+	// Verify ownership
+	if _, err := s.getOwnedResource(ctx, orgID, id); err != nil {
+		return err
+	}
+
+	// Check applications referencing as git provider (fail-closed: abort on query error)
+	apps, _, appErr := s.store.Applications().ListAll(ctx, store.ListParams{Page: 1, PerPage: 10000}, store.AppListFilter{})
+	if appErr != nil {
+		return fmt.Errorf("cannot verify resource references: %w", appErr)
+	}
+	for _, app := range apps {
+		if app.GitProviderID != nil && *app.GitProviderID == id {
+			return fmt.Errorf("resource is in use by application %q as git provider", app.Name)
+		}
+	}
+
+	// Check server nodes referencing as SSH key
+	nodes, nodeErr := s.store.ServerNodes().List(ctx)
+	if nodeErr != nil {
+		return fmt.Errorf("cannot verify resource references: %w", nodeErr)
+	}
+	for _, n := range nodes {
+		if n.SSHKeyID != nil && *n.SSHKeyID == id {
+			return fmt.Errorf("resource is in use by node %q as SSH key", n.Name)
+		}
+	}
+
+	// Check managed databases referencing as backup S3
+	projects, _, projErr := s.store.Projects().ListByOrg(ctx, orgID, store.ListParams{Page: 1, PerPage: 10000})
+	if projErr != nil {
+		return fmt.Errorf("cannot verify resource references: %w", projErr)
+	}
+	for _, p := range projects {
+		dbs, _, dbErr := s.store.ManagedDatabases().ListByProject(ctx, p.ID, store.ListParams{Page: 1, PerPage: 10000})
+		if dbErr != nil {
+			return fmt.Errorf("cannot verify resource references: %w", dbErr)
+		}
+		for _, db := range dbs {
+			if db.BackupS3ID != nil && *db.BackupS3ID == id {
+				return fmt.Errorf("resource is in use by database %q as backup storage", db.Name)
+			}
+		}
+	}
+
+	// Check system backup settings
+	s3IDStr, settErr := s.store.Settings().Get(ctx, "system_backup_s3_id")
+	if settErr == nil && s3IDStr == id.String() {
+		return fmt.Errorf("resource is in use as system backup storage — change backup config first")
+	}
+
 	return s.store.SharedResources().Delete(ctx, id)
 }
 
 // TestConnection validates the credentials for a shared resource.
-func (s *ResourceService) TestConnection(ctx context.Context, id uuid.UUID) (bool, string, error) {
-	resource, err := s.store.SharedResources().GetByID(ctx, id)
+func (s *ResourceService) TestConnection(ctx context.Context, orgID, id uuid.UUID) (bool, string, error) {
+	resource, err := s.getOwnedResource(ctx, orgID, id)
 	if err != nil {
 		return false, "", err
 	}
@@ -251,7 +316,7 @@ func (s *ResourceService) TestConnection(ctx context.Context, id uuid.UUID) (boo
 	case model.ResourceSSHKey:
 		return true, "SSH key stored", nil // SSH keys are validated on use
 	case model.ResourceObjectStorage:
-		return true, "Object storage config stored", nil // TODO: test object storage connection
+		return s.testObjectStorage(resource)
 	default:
 		return false, "unknown resource type", nil
 	}
@@ -331,6 +396,57 @@ func (s *ResourceService) testRegistry(resource *model.SharedResource) (bool, st
 	return false, fmt.Sprintf("registry error (HTTP %d)", resp.StatusCode), nil
 }
 
+func (s *ResourceService) testObjectStorage(resource *model.SharedResource) (bool, string, error) {
+	var config struct {
+		Endpoint  string `json:"endpoint"`
+		Bucket    string `json:"bucket"`
+		Region    string `json:"region"`
+		AccessKey string `json:"access_key"`
+		SecretKey string `json:"secret_key"`
+	}
+	if err := json.Unmarshal(resource.Config, &config); err != nil {
+		return false, "invalid config", nil
+	}
+	if config.Endpoint == "" {
+		return false, "endpoint is required", nil
+	}
+	if config.Bucket == "" {
+		return false, "bucket is required", nil
+	}
+
+	// Use aws-cli to list the bucket with provided credentials (same as backup flow)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "aws", "s3", "ls",
+		fmt.Sprintf("s3://%s/", config.Bucket),
+		"--endpoint-url", config.Endpoint,
+		"--max-items", "1",
+	)
+	cmd.Env = append(os.Environ(),
+		"AWS_ACCESS_KEY_ID="+config.AccessKey,
+		"AWS_SECRET_ACCESS_KEY="+config.SecretKey,
+		"AWS_DEFAULT_REGION="+regionOrDefault(config.Region),
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		msg := strings.TrimSpace(string(output))
+		if msg == "" {
+			msg = err.Error()
+		}
+		return false, "S3 connection failed: " + msg, nil
+	}
+	return true, "S3 bucket accessible", nil
+}
+
+func regionOrDefault(region string) string {
+	if region != "" {
+		return region
+	}
+	return "auto"
+}
+
 // GitRepo represents a repository from a git provider.
 type GitRepo struct {
 	Name          string `json:"name"`
@@ -341,8 +457,8 @@ type GitRepo struct {
 }
 
 // ListRepos fetches repositories from a git provider using its stored token.
-func (s *ResourceService) ListRepos(ctx context.Context, resourceID uuid.UUID) ([]GitRepo, error) {
-	resource, err := s.store.SharedResources().GetByID(ctx, resourceID)
+func (s *ResourceService) ListRepos(ctx context.Context, orgID, resourceID uuid.UUID) ([]GitRepo, error) {
+	resource, err := s.getOwnedResource(ctx, orgID, resourceID)
 	if err != nil {
 		return nil, err
 	}

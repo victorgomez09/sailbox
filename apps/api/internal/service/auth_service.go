@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -99,7 +100,7 @@ func (s *AuthService) Register(ctx context.Context, input RegisterInput) (*AuthR
 		return nil, err
 	}
 
-	tokens, err := s.jwtManager.GenerateTokenPair(user.ID, org.ID, string(user.Role))
+	tokens, err := s.jwtManager.GenerateTokenPair(user.ID, org.ID, string(user.Role), user.TokenVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +137,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput) (*AuthResult,
 		}
 	}
 
-	tokens, err := s.jwtManager.GenerateTokenPair(user.ID, user.OrgID, string(user.Role))
+	tokens, err := s.jwtManager.GenerateTokenPair(user.ID, user.OrgID, string(user.Role), user.TokenVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +153,7 @@ func (s *AuthService) Login(ctx context.Context, input LoginInput) (*AuthResult,
 }
 
 func (s *AuthService) Refresh(ctx context.Context, input RefreshInput) (*AuthResult, error) {
-	userID, err := s.jwtManager.ValidateRefreshToken(input.RefreshToken)
+	userID, tokenVersion, err := s.jwtManager.ValidateRefreshToken(input.RefreshToken)
 	if err != nil {
 		return nil, errors.New("invalid refresh token")
 	}
@@ -162,7 +163,12 @@ func (s *AuthService) Refresh(ctx context.Context, input RefreshInput) (*AuthRes
 		return nil, errors.New("user not found")
 	}
 
-	tokens, err := s.jwtManager.GenerateTokenPair(user.ID, user.OrgID, string(user.Role))
+	// Reject refresh tokens issued before password change or 2FA enable
+	if tokenVersion != user.TokenVersion {
+		return nil, errors.New("session invalidated — please log in again")
+	}
+
+	tokens, err := s.jwtManager.GenerateTokenPair(user.ID, user.OrgID, string(user.Role), user.TokenVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -217,6 +223,9 @@ func (s *AuthService) UpdateProfile(ctx context.Context, userID uuid.UUID, input
 		user.LastName = *input.LastName
 	}
 	if input.DisplayName != nil {
+		if strings.TrimSpace(*input.DisplayName) == "" {
+			return nil, errors.New("display name cannot be empty")
+		}
 		user.DisplayName = *input.DisplayName
 	}
 	if input.AvatarURL != nil {
@@ -250,6 +259,7 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID uuid.UUID, inpu
 	}
 
 	user.PasswordHash = string(hash)
+	user.TokenVersion++ // invalidate all existing refresh tokens
 	if err := s.store.Users().Update(ctx, user); err != nil {
 		return err
 	}
@@ -299,6 +309,7 @@ func (s *AuthService) Verify2FA(ctx context.Context, userID uuid.UUID, code stri
 	}
 
 	user.TwoFAEnabled = true
+	user.TokenVersion++ // invalidate existing refresh tokens — require re-login with 2FA
 	if err := s.store.Users().Update(ctx, user); err != nil {
 		return err
 	}

@@ -11,7 +11,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { DangerZone } from "@/components/danger-zone";
 import { EmptyState } from "@/components/empty-state";
@@ -100,11 +100,14 @@ function ProjectDetailPage() {
   const [editName, setEditName] = useState(project?.name ?? "");
   const [editDesc, setEditDesc] = useState(project?.description ?? "");
 
-  // Sync edit fields when project loads
-  if (project && editName === "" && project.name) {
-    setEditName(project.name);
-    setEditDesc(project.description);
-  }
+  // Sync edit fields when project data changes
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only sync on name/description value change
+  useEffect(() => {
+    if (project) {
+      setEditName(project.name);
+      setEditDesc(project.description);
+    }
+  }, [project?.name, project?.description]);
 
   // ── Derived ───────────────────────────────────────────────────
   const services: ServiceItem[] = [
@@ -160,15 +163,13 @@ function ProjectDetailPage() {
     <div>
       <PageHeader
         title={project.name}
-        description={
-          <>
-            {project.description}
-            {project.namespace && (
-              <span className="ml-2 font-mono text-xs text-muted-foreground">
-                ns: {project.namespace}
-              </span>
-            )}
-          </>
+        description={project.description || undefined}
+        badges={
+          project.namespace ? (
+            <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+              {project.namespace}
+            </code>
+          ) : undefined
         }
         backTo="/projects"
       />
@@ -202,7 +203,11 @@ function ProjectDetailPage() {
 
         {/* ── Environment tab ── */}
         <TabsContent value="environment" className="mt-4">
-          <ProjectEnvEditor projectId={projectId} envVars={project.env_vars} />
+          <ProjectEnvEditor
+            key={JSON.stringify(project.env_vars)}
+            projectId={projectId}
+            envVars={project.env_vars}
+          />
         </TabsContent>
 
         {/* ── Settings tab ── */}

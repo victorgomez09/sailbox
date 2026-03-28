@@ -8,7 +8,9 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/getsentry/sentry-go"
 	"github.com/uptrace/bun/migrate"
 
 	"github.com/sailboxhq/sailbox/apps/api/internal/api/ws"
@@ -20,6 +22,7 @@ import (
 	"github.com/sailboxhq/sailbox/apps/api/internal/server"
 	"github.com/sailboxhq/sailbox/apps/api/internal/service"
 	"github.com/sailboxhq/sailbox/apps/api/internal/store/pg"
+	"github.com/sailboxhq/sailbox/apps/api/internal/version"
 	"github.com/sailboxhq/sailbox/apps/api/migrations"
 )
 
@@ -28,6 +31,22 @@ func main() {
 		Level: slog.LevelInfo,
 	}))
 	slog.SetDefault(logger)
+
+	// Sentry — only active when SENTRY_DSN is set
+	if dsn := os.Getenv("SENTRY_DSN"); dsn != "" {
+		if err := sentry.Init(sentry.ClientOptions{
+			Dsn:              dsn,
+			Release:          version.Version,
+			Environment:      os.Getenv("SENTRY_ENV"),
+			TracesSampleRate: 0.2,
+			EnableTracing:    true,
+		}); err != nil {
+			logger.Warn("sentry init failed", slog.Any("error", err))
+		} else {
+			logger.Info("sentry initialized")
+			defer sentry.Flush(2 * time.Second)
+		}
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -111,7 +130,7 @@ func main() {
 	metricsStore := pg.NewMetricsStore(store.DB())
 
 	// Services
-	services := service.NewContainer(store, metricsStore, orch, jwtManager, logger, cfg.Database.URL)
+	services := service.NewContainer(store, metricsStore, orch, jwtManager, logger, cfg.Database.URL, cfg.Auth.SetupSecret)
 
 	// Start background metrics collector
 	services.Metrics.Start()
@@ -124,13 +143,14 @@ func main() {
 
 	// Router
 	router := server.NewRouter(&server.RouterDeps{
-		Services:   services,
-		JWTManager: jwtManager,
-		Orch:       orch,
-		Store:      store,
-		SSEBroker:  sseBroker,
-		AppURL:     cfg.Server.AppURL,
-		Logger:     logger,
+		Services:    services,
+		JWTManager:  jwtManager,
+		Orch:        orch,
+		Store:       store,
+		SSEBroker:   sseBroker,
+		AppURL:      cfg.Server.AppURL,
+		SetupSecret: cfg.Auth.SetupSecret,
+		Logger:      logger,
 	})
 
 	// HTTP server

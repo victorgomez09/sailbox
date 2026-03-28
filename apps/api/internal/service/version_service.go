@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,10 +24,9 @@ type VersionInfo struct {
 }
 
 type VersionService struct {
-	logger    *slog.Logger
-	mu        sync.RWMutex
-	cached    *VersionInfo
-	checkedAt time.Time
+	logger *slog.Logger
+	mu     sync.RWMutex
+	cached *VersionInfo
 }
 
 func NewVersionService(logger *slog.Logger) *VersionService {
@@ -104,11 +104,8 @@ func (s *VersionService) checkForUpdate() {
 	}
 
 	latest := release.TagName
-	// Strip leading 'v' for comparison
-	currentClean := strings.TrimPrefix(appVersion.Version, "v")
-	latestClean := strings.TrimPrefix(latest, "v")
 
-	updateAvail := latestClean != currentClean && appVersion.Version != "dev"
+	updateAvail := appVersion.Version != "dev" && shouldUpdate(latest, appVersion.Version)
 
 	s.mu.Lock()
 	s.cached = &VersionInfo{
@@ -119,12 +116,68 @@ func (s *VersionService) checkForUpdate() {
 		Changelog:   release.Body,
 		PublishedAt: release.PublishedAt,
 	}
-	s.checkedAt = time.Now()
+
 	s.mu.Unlock()
 
 	if updateAvail {
 		s.logger.Info("new version available", slog.String("current", appVersion.Version), slog.String("latest", latest))
 	}
+}
+
+// shouldUpdate returns true if the user should upgrade.
+// True when: latest > current, OR current is a pre-release of the same version.
+func shouldUpdate(latest, current string) bool {
+	latestClean := strings.TrimPrefix(latest, "v")
+	currentClean := strings.TrimPrefix(current, "v")
+
+	// Same exact string — no update
+	if latestClean == currentClean {
+		return false
+	}
+
+	// Current is pre-release (e.g. v1.1.0-rc1), latest is same base version (v1.1.0) — update
+	if strings.Contains(currentClean, "-") {
+		currentBase := currentClean[:strings.IndexByte(currentClean, '-')]
+		latestBase := latestClean
+		if idx := strings.IndexByte(latestBase, '-'); idx != -1 {
+			latestBase = latestBase[:idx]
+		}
+		if currentBase == latestBase && !strings.Contains(latestClean, "-") {
+			return true
+		}
+	}
+
+	return isNewer(latest, current)
+}
+
+// isNewer returns true if latest is a higher semver than current.
+func isNewer(latest, current string) bool {
+	parse := func(v string) (int, int, int) {
+		v = strings.TrimPrefix(v, "v")
+		// Strip pre-release suffix (e.g. "-rc1")
+		if idx := strings.IndexByte(v, '-'); idx != -1 {
+			v = v[:idx]
+		}
+		parts := strings.SplitN(v, ".", 3)
+		a, _ := strconv.Atoi(parts[0])
+		b, c := 0, 0
+		if len(parts) > 1 {
+			b, _ = strconv.Atoi(parts[1])
+		}
+		if len(parts) > 2 {
+			c, _ = strconv.Atoi(parts[2])
+		}
+		return a, b, c
+	}
+	la, lb, lc := parse(latest)
+	ca, cb, cc := parse(current)
+	if la != ca {
+		return la > ca
+	}
+	if lb != cb {
+		return lb > cb
+	}
+	return lc > cc
 }
 
 func (s *VersionService) setCached(current, latest string, updateAvail bool) {
@@ -134,6 +187,6 @@ func (s *VersionService) setCached(current, latest string, updateAvail bool) {
 		Latest:      latest,
 		UpdateAvail: updateAvail,
 	}
-	s.checkedAt = time.Now()
+
 	s.mu.Unlock()
 }

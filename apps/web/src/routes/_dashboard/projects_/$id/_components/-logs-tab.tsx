@@ -63,6 +63,7 @@ function WebTerminal({ appId, pods }: { appId: string; pods: PodInfo[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<{ term: any; fitAddon: any } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const [connected, setConnected] = useState(false);
 
   const hasPods = pods.length > 0;
@@ -131,11 +132,15 @@ function WebTerminal({ appId, pods }: { appId: string; pods: PodInfo[] }) {
     });
 
     // Window resize -> fit
+    resizeObserverRef.current?.disconnect();
     const resizeObserver = new ResizeObserver(() => fitAddon.fit());
     resizeObserver.observe(containerRef.current);
+    resizeObserverRef.current = resizeObserver;
   }
 
   function disconnect() {
+    resizeObserverRef.current?.disconnect();
+    resizeObserverRef.current = null;
     wsRef.current?.close();
     wsRef.current = null;
     if (termRef.current) {
@@ -147,6 +152,7 @@ function WebTerminal({ appId, pods }: { appId: string; pods: PodInfo[] }) {
 
   useEffect(() => {
     return () => {
+      resizeObserverRef.current?.disconnect();
       wsRef.current?.close();
       termRef.current?.term.dispose();
     };
@@ -233,6 +239,14 @@ export function LogsTab({
     ws.onmessage = (e) => setLogs((prev) => [...prev.slice(-499), e.data]);
     ws.onclose = () => setConnected(false);
   }, [appId, selectedPod]);
+
+  // Auto-reconnect when pod selection changes while connected
+  // biome-ignore lint/correctness/useExhaustiveDependencies: only reconnect on pod change, not on connect/connected identity
+  useEffect(() => {
+    if (connected) {
+      connect();
+    }
+  }, [selectedPod]);
 
   function disconnect() {
     wsRef.current?.close();

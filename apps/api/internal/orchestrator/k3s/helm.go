@@ -40,20 +40,18 @@ func (o *Orchestrator) GetHelmReleases(ctx context.Context) ([]orchestrator.Helm
 
 		status := sec.Labels["status"]
 		chart := sec.Labels["name"]
-		appVersion := sec.Labels["version"]
 
 		rel := orchestrator.HelmRelease{
-			Name:       releaseName,
-			Namespace:  sec.Namespace,
-			Chart:      chart,
-			Version:    version,
-			AppVersion: appVersion,
-			Status:     status,
-			Updated:    sec.CreationTimestamp.Format("2006-01-02 15:04:05"),
+			Name:      releaseName,
+			Namespace: sec.Namespace,
+			Chart:     chart,
+			Revision:  version,
+			Status:    status,
+			Updated:   sec.CreationTimestamp.Format("2006-01-02 15:04:05"),
 		}
 
 		key := sec.Namespace + "/" + releaseName
-		if existing, ok := latest[key]; !ok || versionNum(version) > versionNum(existing.Version) {
+		if existing, ok := latest[key]; !ok || versionNum(version) > versionNum(existing.Revision) {
 			latest[key] = rel
 		}
 	}

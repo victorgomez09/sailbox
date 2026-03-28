@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { HardDrive, Loader2, Maximize2, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,14 +25,20 @@ export const Route = createFileRoute("/_dashboard/volumes")({
 });
 
 function VolumesPage() {
-  const { data: pvcs, isLoading } = useClusterPVCs();
+  const { data: pvcs, isLoading, isError } = useClusterPVCs();
 
   return (
     <div>
       <PageHeader title="Volumes" description="Persistent volume claims across all namespaces." />
       <Separator className="my-5" />
 
-      {isLoading ? (
+      {isError ? (
+        <Card>
+          <CardContent className="py-8 text-center text-sm text-destructive">
+            Failed to load volumes
+          </CardContent>
+        </Card>
+      ) : isLoading ? (
         <div className="flex justify-center py-12">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
@@ -116,6 +122,11 @@ function ExpandDialog({
   const expandPVC = useExpandPVC();
   const [newSize, setNewSize] = useState("");
 
+  // Reset size when dialog opens/closes
+  useEffect(() => {
+    if (!open) setNewSize("");
+  }, [open]);
+
   function handleExpand() {
     if (!newSize) return;
     expandPVC.mutate(
@@ -174,6 +185,10 @@ function DeleteDialog({
   const deletePVC = useDeletePVC();
   const [confirmName, setConfirmName] = useState("");
   const isBound = pvc.status === "Bound" && pvc.used_by && pvc.used_by.length > 0;
+
+  useEffect(() => {
+    if (!open) setConfirmName("");
+  }, [open]);
 
   function handleDelete() {
     deletePVC.mutate(

@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { AnimatedOutlet } from "@/components/animated-outlet";
@@ -8,18 +9,32 @@ import { useEventSource } from "@/hooks/use-event-source";
 import { api } from "@/lib/api";
 import { clearTokens, getToken, setupAuthRedirect } from "@/lib/auth";
 
+// Cache the verification promise so it only runs once per page load,
+// not on every route change. This prevents SSE reconnection on navigation.
+let verified: Promise<void> | null = null;
+
+function verifyToken(): Promise<void> {
+  if (!verified) {
+    verified = api.get("/api/v1/auth/me").catch(() => {
+      verified = null;
+      clearTokens();
+      throw redirect({ to: "/auth/login" });
+    });
+  }
+  return verified;
+}
+
+// Reset on logout so next login re-verifies
+export function resetVerification() {
+  verified = null;
+}
+
 export const Route = createFileRoute("/_dashboard")({
   beforeLoad: async () => {
     if (!getToken()) {
       throw redirect({ to: "/auth/login" });
     }
-    // Verify the token is still valid — handles DB reset, expiry, etc.
-    try {
-      await api.get("/api/v1/auth/me");
-    } catch {
-      clearTokens();
-      throw redirect({ to: "/auth/login" });
-    }
+    await verifyToken();
   },
   component: DashboardLayout,
 });
@@ -27,10 +42,15 @@ export const Route = createFileRoute("/_dashboard")({
 function DashboardLayout() {
   const navigate = useNavigate();
   const sidebar = useSidebarState();
+  const qc = useQueryClient();
 
   useEffect(() => {
-    setupAuthRedirect(() => navigate({ to: "/auth/login" }));
-  }, [navigate]);
+    setupAuthRedirect(() => {
+      resetVerification();
+      qc.removeQueries({ queryKey: ["auth", "setup-status"] });
+      navigate({ to: "/auth/login" });
+    });
+  }, [navigate, qc]);
 
   useEventSource();
 

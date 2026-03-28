@@ -21,6 +21,12 @@ type Claims struct {
 	Role   string    `json:"role"`
 }
 
+// RefreshClaims represents claims in a refresh token.
+type RefreshClaims struct {
+	jwt.RegisteredClaims
+	TokenVersion int `json:"tv"`
+}
+
 // JWTManager handles JWT token generation and validation.
 type JWTManager struct {
 	secret        []byte
@@ -45,7 +51,7 @@ type TokenPair struct {
 }
 
 // GenerateTokenPair creates a new access + refresh token pair.
-func (m *JWTManager) GenerateTokenPair(userID, orgID uuid.UUID, role string) (*TokenPair, error) {
+func (m *JWTManager) GenerateTokenPair(userID, orgID uuid.UUID, role string, tokenVersion ...int) (*TokenPair, error) {
 	now := time.Now()
 
 	// Access token
@@ -66,12 +72,19 @@ func (m *JWTManager) GenerateTokenPair(userID, orgID uuid.UUID, role string) (*T
 		return nil, err
 	}
 
-	// Refresh token (longer lived, minimal claims)
-	refreshClaims := jwt.RegisteredClaims{
-		Subject:   userID.String(),
-		IssuedAt:  jwt.NewNumericDate(now),
-		ExpiresAt: jwt.NewNumericDate(now.Add(m.refreshExpiry)),
-		Issuer:    "sailbox-refresh",
+	// Refresh token (longer lived, includes token version for invalidation)
+	tv := 0
+	if len(tokenVersion) > 0 {
+		tv = tokenVersion[0]
+	}
+	refreshClaims := RefreshClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   userID.String(),
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(m.refreshExpiry)),
+			Issuer:    "sailbox-refresh",
+		},
+		TokenVersion: tv,
 	}
 
 	refreshToken, err := jwt.NewWithClaims(jwt.SigningMethodHS256, refreshClaims).SignedString(m.secret)
@@ -109,24 +122,24 @@ func (m *JWTManager) ValidateAccessToken(tokenString string) (*Claims, error) {
 	return claims, nil
 }
 
-// ValidateRefreshToken parses and validates a refresh token, returning the user ID.
-func (m *JWTManager) ValidateRefreshToken(tokenString string) (uuid.UUID, error) {
-	token, err := jwt.ParseWithClaims(tokenString, &jwt.RegisteredClaims{}, func(token *jwt.Token) (any, error) {
+// ValidateRefreshToken parses and validates a refresh token, returning the user ID and token version.
+func (m *JWTManager) ValidateRefreshToken(tokenString string) (uuid.UUID, int, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &RefreshClaims{}, func(token *jwt.Token) (any, error) {
 		return m.secret, nil
 	})
 	if err != nil {
-		return uuid.Nil, ErrInvalidToken
+		return uuid.Nil, 0, ErrInvalidToken
 	}
 
-	claims, ok := token.Claims.(*jwt.RegisteredClaims)
+	claims, ok := token.Claims.(*RefreshClaims)
 	if !ok || !token.Valid || claims.Issuer != "sailbox-refresh" {
-		return uuid.Nil, ErrInvalidToken
+		return uuid.Nil, 0, ErrInvalidToken
 	}
 
 	userID, err := uuid.Parse(claims.Subject)
 	if err != nil {
-		return uuid.Nil, ErrInvalidToken
+		return uuid.Nil, 0, ErrInvalidToken
 	}
 
-	return userID, nil
+	return userID, claims.TokenVersion, nil
 }

@@ -78,8 +78,8 @@ class ApiClient {
     return this.request<T>(path);
   }
 
-  post<T>(path: string, body?: unknown) {
-    return this.request<T>(path, { method: "POST", body });
+  post<T>(path: string, body?: unknown, headers?: Record<string, string>) {
+    return this.request<T>(path, { method: "POST", body, headers });
   }
 
   put<T>(path: string, body?: unknown) {

@@ -58,6 +58,15 @@ func (s *DatabaseService) Create(ctx context.Context, input CreateDatabaseInput)
 		return nil, fmt.Errorf("database name %q contains invalid characters", dbName)
 	}
 
+	// Inherit namespace from project
+	project, err := s.store.Projects().GetByID(ctx, input.ProjectID)
+	if err != nil {
+		return nil, fmt.Errorf("project not found: %w", err)
+	}
+	if project.Namespace == "" {
+		return nil, fmt.Errorf("project has no namespace configured")
+	}
+
 	db := &model.ManagedDatabase{
 		ProjectID:    input.ProjectID,
 		Name:         input.Name,
@@ -67,6 +76,7 @@ func (s *DatabaseService) Create(ctx context.Context, input CreateDatabaseInput)
 		StorageSize:  input.StorageSize,
 		CPULimit:     input.CPULimit,
 		MemLimit:     input.MemLimit,
+		Namespace:    project.Namespace,
 		Status:       model.AppStatusIdle,
 	}
 
@@ -156,7 +166,13 @@ func (s *DatabaseService) GetStatus(ctx context.Context, id uuid.UUID) (*orchest
 	case "running":
 		newStatus = model.AppStatusRunning
 	case "not deployed":
-		newStatus = model.AppStatusIdle
+		if db.Status == model.AppStatusIdle {
+			// Fresh database that was never deployed — keep idle
+			newStatus = model.AppStatusIdle
+		} else {
+			// Previously deployed database with missing resources — flag as error
+			newStatus = model.AppStatusError
+		}
 	case "pending":
 		newStatus = "pending"
 	case "stopped":
@@ -244,7 +260,7 @@ func (s *DatabaseService) UpdateBackupConfig(ctx context.Context, id uuid.UUID, 
 		}
 	}
 
-	// Validate S3 resource exists if provided
+	// Validate S3 resource exists, is correct type, and belongs to same org
 	if input.S3ID != nil {
 		resource, err := s.store.SharedResources().GetByID(ctx, *input.S3ID)
 		if err != nil {
@@ -252,6 +268,13 @@ func (s *DatabaseService) UpdateBackupConfig(ctx context.Context, id uuid.UUID, 
 		}
 		if resource.Type != model.ResourceObjectStorage {
 			return nil, fmt.Errorf("resource %s is not an object storage resource", resource.Name)
+		}
+		project, projErr := s.store.Projects().GetByID(ctx, db.ProjectID)
+		if projErr != nil {
+			return nil, fmt.Errorf("project not found: %w", projErr)
+		}
+		if resource.OrgID != project.OrgID {
+			return nil, fmt.Errorf("S3 resource does not belong to this organization")
 		}
 	}
 

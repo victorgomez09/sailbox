@@ -44,6 +44,7 @@ func (h *ResourceHandler) Create(c *gin.Context) {
 }
 
 func (h *ResourceHandler) Update(c *gin.Context) {
+	orgID := middleware.GetOrgID(c)
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		httputil.RespondError(c, apierr.ErrBadRequest.WithDetail("invalid resource ID"))
@@ -54,7 +55,7 @@ func (h *ResourceHandler) Update(c *gin.Context) {
 		httputil.RespondError(c, apierr.ErrValidation.WithDetail(err.Error()))
 		return
 	}
-	resource, err := h.svc.Update(c.Request.Context(), id, input)
+	resource, err := h.svc.Update(c.Request.Context(), orgID, id, input)
 	if err != nil {
 		httputil.RespondError(c, err)
 		return
@@ -63,12 +64,13 @@ func (h *ResourceHandler) Update(c *gin.Context) {
 }
 
 func (h *ResourceHandler) Delete(c *gin.Context) {
+	orgID := middleware.GetOrgID(c)
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		httputil.RespondError(c, apierr.ErrBadRequest.WithDetail("invalid resource ID"))
 		return
 	}
-	if err := h.svc.Delete(c.Request.Context(), id); err != nil {
+	if err := h.svc.Delete(c.Request.Context(), orgID, id); err != nil {
 		httputil.RespondError(c, err)
 		return
 	}
@@ -76,12 +78,13 @@ func (h *ResourceHandler) Delete(c *gin.Context) {
 }
 
 func (h *ResourceHandler) TestConnection(c *gin.Context) {
+	orgID := middleware.GetOrgID(c)
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		httputil.RespondError(c, apierr.ErrBadRequest.WithDetail("invalid resource ID"))
 		return
 	}
-	ok, msg, err := h.svc.TestConnection(c.Request.Context(), id)
+	ok, msg, err := h.svc.TestConnection(c.Request.Context(), orgID, id)
 	if err != nil {
 		httputil.RespondError(c, err)
 		return
@@ -90,12 +93,13 @@ func (h *ResourceHandler) TestConnection(c *gin.Context) {
 }
 
 func (h *ResourceHandler) ListRepos(c *gin.Context) {
+	orgID := middleware.GetOrgID(c)
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
 		httputil.RespondError(c, apierr.ErrBadRequest.WithDetail("invalid resource ID"))
 		return
 	}
-	repos, err := h.svc.ListRepos(c.Request.Context(), id)
+	repos, err := h.svc.ListRepos(c.Request.Context(), orgID, id)
 	if err != nil {
 		httputil.RespondError(c, err)
 		return

@@ -73,6 +73,35 @@ func (s *SystemBackupService) GetConfig(ctx context.Context) (*SystemBackupConfi
 
 // SaveConfig writes system backup configuration to settings.
 func (s *SystemBackupService) SaveConfig(ctx context.Context, cfg *SystemBackupConfig) error {
+	// When enabling, require S3 and schedule
+	if cfg.Enabled {
+		if cfg.S3ID == "" {
+			return fmt.Errorf("S3 storage resource is required when backups are enabled")
+		}
+		if cfg.Schedule == "" {
+			return fmt.Errorf("backup schedule is required when backups are enabled")
+		}
+		fields := strings.Fields(cfg.Schedule)
+		if len(fields) != 5 {
+			return fmt.Errorf("invalid cron schedule %q: expected 5 fields", cfg.Schedule)
+		}
+	}
+
+	// Validate S3 resource exists and is correct type
+	if cfg.S3ID != "" {
+		s3UUID, parseErr := uuid.Parse(cfg.S3ID)
+		if parseErr != nil {
+			return fmt.Errorf("invalid S3 resource ID: %w", parseErr)
+		}
+		resource, resErr := s.store.SharedResources().GetByID(ctx, s3UUID)
+		if resErr != nil {
+			return fmt.Errorf("S3 resource not found: %w", resErr)
+		}
+		if resource.Type != model.ResourceObjectStorage {
+			return fmt.Errorf("resource %q is not an object storage resource", resource.Name)
+		}
+	}
+
 	pairs := map[string]string{
 		"system_backup_s3_id":     cfg.S3ID,
 		"system_backup_schedule":  cfg.Schedule,
@@ -354,7 +383,17 @@ type S3BackupFile struct {
 }
 
 // ScanS3Backups connects to S3 with provided credentials and lists available .dump files.
+// Only allowed on fresh installations (no users registered).
 func (s *SystemBackupService) ScanS3Backups(ctx context.Context, s3 orchestrator.S3Config, path string) ([]S3BackupFile, error) {
+	// Safety check: only allow scan on fresh installation (no users)
+	count, err := s.store.Users().Count(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check user count: %w", err)
+	}
+	if count > 0 {
+		return nil, fmt.Errorf("restore scan is only available on fresh installations")
+	}
+
 	if path == "" {
 		path = "sailbox-backups"
 	}
@@ -366,7 +405,7 @@ func (s *SystemBackupService) ScanS3Backups(ctx context.Context, s3 orchestrator
 	cmd.Env = append(os.Environ(),
 		"AWS_ACCESS_KEY_ID="+s3.AccessKey,
 		"AWS_SECRET_ACCESS_KEY="+s3.SecretKey,
-		"AWS_DEFAULT_REGION=auto",
+		"AWS_DEFAULT_REGION="+s3Region(s3.Region),
 	)
 
 	output, err := cmd.CombinedOutput()
@@ -439,7 +478,7 @@ func (s *SystemBackupService) RestoreFromS3(ctx context.Context, s3 orchestrator
 	dlCmd.Env = append(os.Environ(),
 		"AWS_ACCESS_KEY_ID="+s3.AccessKey,
 		"AWS_SECRET_ACCESS_KEY="+s3.SecretKey,
-		"AWS_DEFAULT_REGION=auto",
+		"AWS_DEFAULT_REGION="+s3Region(s3.Region),
 	)
 
 	if output, err := dlCmd.CombinedOutput(); err != nil {

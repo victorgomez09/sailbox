@@ -60,7 +60,13 @@ export function useScanS3Backups() {
       access_key: string;
       secret_key: string;
       path: string;
-    }) => api.post<S3BackupFile[]>("/api/v1/system/restore/scan", data),
+      setup_secret: string;
+    }) => {
+      const { setup_secret, ...body } = data;
+      return api.post<S3BackupFile[]>("/api/v1/system/restore/scan", body, {
+        "X-Setup-Secret": setup_secret,
+      });
+    },
   });
 }
 
@@ -72,6 +78,12 @@ export function useRestoreFromS3() {
       access_key: string;
       secret_key: string;
       s3_key: string;
-    }) => api.post("/api/v1/system/restore/execute", data),
+      setup_secret: string;
+    }) => {
+      const { setup_secret, ...body } = data;
+      return api.post("/api/v1/system/restore/execute", body, {
+        "X-Setup-Secret": setup_secret,
+      });
+    },
   });
 }

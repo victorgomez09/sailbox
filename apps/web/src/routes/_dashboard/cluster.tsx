@@ -84,7 +84,7 @@ import {
   useMonitoringSnapshots,
   useResolveAlert,
 } from "@/hooks/use-monitoring";
-import { useCreateNode, useInitializeNode } from "@/hooks/use-nodes";
+import { useCreateNode, useDeleteNode, useInitializeNode, useNodes } from "@/hooks/use-nodes";
 import { useResources } from "@/hooks/use-resources";
 import { getToken } from "@/lib/auth";
 import { statusVariant } from "@/lib/constants";
@@ -147,6 +147,14 @@ function pctNumber(used: string, total: string): number {
   return Math.min(100, Math.round((u / t) * 100));
 }
 
+function ErrorBanner({ message }: { message: string }) {
+  return (
+    <Card className="mt-3">
+      <CardContent className="py-8 text-center text-sm text-destructive">{message}</CardContent>
+    </Card>
+  );
+}
+
 function ProgressBar({ value, className }: { value: number; className?: string }) {
   const color = value > 90 ? "bg-red-500" : value > 70 ? "bg-amber-500" : "bg-green-500";
   return (
@@ -170,15 +178,15 @@ function pvcStatusVariant(status: string) {
 // ── Main Page ────────────────────────────────────────────────────
 
 function ClusterPage() {
-  const { data: nodes } = useClusterNodes();
+  const { data: nodes, isError: nodesError } = useClusterNodes();
   const { data: metrics, isLoading: metricsLoading } = useClusterMetrics();
   const { data: nodeMetrics, isLoading: nodeMetricsLoading } = useNodeMetrics();
-  const { data: pods } = useClusterPods();
+  const { data: pods, isError: podsError } = useClusterPods();
   // Events tab uses its own hook (useMonitoringEvents) for persisted data
-  const { data: pvcs } = useClusterPVCs();
-  const { data: namespaces } = useClusterNamespaces();
+  const { data: pvcs, isError: pvcsError } = useClusterPVCs();
+  const { data: namespaces, isError: nsError } = useClusterNamespaces();
   const { data: activeAlertsData } = useActiveAlerts();
-  const { data: topology } = useClusterTopology();
+  const { data: topology, isError: topoError } = useClusterTopology();
   const activeAlertCount = activeAlertsData?.count ?? 0;
 
   // Only block on critical data for the overview cards
@@ -246,13 +254,25 @@ function ClusterPage() {
         </TabsList>
 
         <TabsContent value="topology">
-          {topology && <ClusterTopologyView data={topology} />}
+          {topoError ? (
+            <ErrorBanner message="Failed to load cluster topology" />
+          ) : (
+            topology && <ClusterTopologyView data={topology} />
+          )}
         </TabsContent>
         <TabsContent value="nodes">
-          <NodesTab nodes={nodes ?? []} nodeMetrics={nodeMetrics ?? []} />
+          {nodesError ? (
+            <ErrorBanner message="Failed to load nodes" />
+          ) : (
+            <NodesTab nodes={nodes ?? []} nodeMetrics={nodeMetrics ?? []} />
+          )}
         </TabsContent>
         <TabsContent value="pods">
-          <PodsTab pods={pods ?? []} namespaces={namespaces ?? []} />
+          {podsError ? (
+            <ErrorBanner message="Failed to load pods" />
+          ) : (
+            <PodsTab pods={pods ?? []} namespaces={namespaces ?? []} />
+          )}
         </TabsContent>
         <TabsContent value="events">
           <EventsTab />
@@ -261,10 +281,18 @@ function ClusterPage() {
           <AlertsTab />
         </TabsContent>
         <TabsContent value="storage">
-          <StorageTab pvcs={pvcs ?? []} />
+          {pvcsError ? (
+            <ErrorBanner message="Failed to load volumes" />
+          ) : (
+            <StorageTab pvcs={pvcs ?? []} />
+          )}
         </TabsContent>
         <TabsContent value="namespaces">
-          <NamespacesTab namespaces={namespaces ?? []} />
+          {nsError ? (
+            <ErrorBanner message="Failed to load namespaces" />
+          ) : (
+            <NamespacesTab namespaces={namespaces ?? []} />
+          )}
         </TabsContent>
         <TabsContent value="helm">
           <HelmTab />
@@ -489,6 +517,20 @@ function NodesTab({
   const [sheetOpen, setSheetOpen] = useState(false);
   const { data: pools } = useNodePools();
   const setNodePool = useSetNodePool();
+  const { data: managedNodes } = useNodes();
+  const deleteNode = useDeleteNode();
+
+  const k8sNodeNames = new Set(nodes.map((n) => n.name));
+  // Managed nodes not yet in K8s (pending, initializing, or failed)
+  const pendingNodes = (managedNodes ?? []).filter(
+    (mn) =>
+      !k8sNodeNames.has(mn.name) && !k8sNodeNames.has(mn.k8s_node_name) && mn.status !== "ready",
+  );
+  // Managed nodes marked ready in DB but missing from K8s (offline)
+  const offlineNodes = (managedNodes ?? []).filter(
+    (mn) =>
+      mn.status === "ready" && !k8sNodeNames.has(mn.name) && !k8sNodeNames.has(mn.k8s_node_name),
+  );
 
   const metricsMap = useMemo(() => {
     const map = new Map<string, NodeMetricsType>();
@@ -604,6 +646,69 @@ function NodesTab({
         })
       )}
 
+      {offlineNodes.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-xs font-medium text-muted-foreground">Offline Nodes</h3>
+          {offlineNodes.map((mn) => (
+            <Card key={mn.id}>
+              <CardContent className="flex items-center gap-3 p-4">
+                <Server className="h-4 w-4 text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">{mn.k8s_node_name || mn.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {mn.host} · Previously ready, no longer in cluster
+                  </p>
+                </div>
+                <Badge variant="secondary" className="text-xs">
+                  offline
+                </Badge>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-destructive"
+                  onClick={() => deleteNode.mutate(mn.id)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {pendingNodes.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-xs font-medium text-muted-foreground">Pending / Failed Nodes</h3>
+          {pendingNodes.map((mn) => (
+            <Card key={mn.id}>
+              <CardContent className="flex items-center gap-3 p-4">
+                <Server className="h-4 w-4 text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">{mn.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {mn.host}:{mn.port} · {mn.status}
+                  </p>
+                </div>
+                <Badge
+                  variant={mn.status === "error" ? "destructive" : "warning"}
+                  className="text-xs"
+                >
+                  {mn.status}
+                </Badge>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-destructive"
+                  onClick={() => deleteNode.mutate(mn.id)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
       <AddNodeSheet open={sheetOpen} onOpenChange={setSheetOpen} />
     </div>
   );
@@ -620,6 +725,7 @@ function AddNodeSheet({
 }) {
   const createNode = useCreateNode();
   const initializeNode = useInitializeNode();
+  const deleteNodeMut = useDeleteNode();
   const { data: sshKeys } = useResources("ssh_key");
 
   const [name, setName] = useState("");
@@ -635,6 +741,7 @@ function AddNodeSheet({
 
   const [phase, setPhase] = useState<"form" | "initializing" | "done" | "error">("form");
   const [logs, setLogs] = useState<string[]>([]);
+  const [createdNodeId, setCreatedNodeId] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -651,6 +758,7 @@ function AddNodeSheet({
     setRole("worker");
     setPhase("form");
     setLogs([]);
+    setCreatedNodeId(null);
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
@@ -674,12 +782,14 @@ function AddNodeSheet({
     };
   }, []);
 
-  // Auto-scroll terminal
+  // Auto-scroll terminal on new log entries
+  const logsLength = logs.length;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: scroll on log count change
   useEffect(() => {
     if (logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
     }
-  }, []);
+  }, [logsLength]);
 
   const connectWs = useCallback((nodeId: string) => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -698,8 +808,11 @@ function AddNodeSheet({
       }
     };
     ws.onclose = () => {
-      // Only mark done if not already in error state
-      setPhase((prev) => (prev === "initializing" ? "done" : prev));
+      // Don't auto-mark as done — only explicit "joined the cluster" message should do that
+      setPhase((prev) => {
+        if (prev === "initializing") return "error";
+        return prev;
+      });
     };
     ws.onerror = () => {
       setLogs((prev) => [...prev, "--- WebSocket error ---"]);
@@ -711,9 +824,20 @@ function AddNodeSheet({
     const resolvedUser = sshUser === "custom" ? customUser : sshUser;
 
     setPhase("initializing");
-    setLogs(["Creating node record..."]);
 
     try {
+      // On retry, delete the old failed record so we pick up any form changes
+      if (createdNodeId) {
+        setLogs(["Cleaning up previous attempt..."]);
+        try {
+          await deleteNodeMut.mutateAsync(createdNodeId);
+        } catch {
+          // Ignore — record may already be gone
+        }
+        setCreatedNodeId(null);
+      }
+
+      setLogs((prev) => [...prev, "Creating node record..."]);
       const node = await createNode.mutateAsync({
         name,
         host,
@@ -723,10 +847,10 @@ function AddNodeSheet({
         ...(authType === "password" ? { password } : sshKeyId ? { ssh_key_id: sshKeyId } : {}),
         role,
       });
-
+      setCreatedNodeId(node.id);
       setLogs((prev) => [...prev, `Node "${node.name}" created. Starting initialization...`]);
-      connectWs(node.id);
 
+      connectWs(node.id);
       await initializeNode.mutateAsync(node.id);
     } catch {
       setPhase("error");
@@ -743,7 +867,9 @@ function AddNodeSheet({
     password,
     sshKeyId,
     role,
+    createdNodeId,
     createNode,
+    deleteNodeMut,
     initializeNode,
     connectWs,
   ]);
@@ -944,13 +1070,14 @@ function PodsTab({ pods, namespaces }: { pods: PodInfo[]; namespaces: NamespaceI
 
   const filtered = useMemo(() => {
     let result = pods;
-    // Note: namespace filter is a placeholder — PodInfo currently lacks a namespace field.
-    // The Select is kept for future use when namespace is added to the pod model.
+    if (nsFilter !== "all") {
+      result = result.filter((p) => p.namespace === nsFilter);
+    }
     if (statusFilter !== "all") {
       result = result.filter((p) => p.phase === statusFilter);
     }
     return result;
-  }, [pods, statusFilter]);
+  }, [pods, nsFilter, statusFilter]);
 
   return (
     <div className="mt-3 space-y-3">
@@ -988,10 +1115,15 @@ function PodsTab({ pods, namespaces }: { pods: PodInfo[]; namespaces: NamespaceI
         <Card>
           <CardContent className="divide-y p-0">
             {filtered.map((pod) => (
-              <div key={pod.name} className="flex items-center gap-4 px-4 py-3">
+              <div
+                key={`${pod.namespace}/${pod.name}`}
+                className="flex items-center gap-4 px-4 py-3"
+              >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="truncate font-mono text-sm">{pod.name}</span>
+                    <span className="truncate font-mono text-sm">
+                      {pod.namespace}/{pod.name}
+                    </span>
                     <Badge variant={statusVariant(pod.phase)}>{pod.phase}</Badge>
                     {pod.restart_count > 0 && (
                       <Badge variant="warning" className="text-xs">
@@ -1025,7 +1157,8 @@ function PodsTab({ pods, namespaces }: { pods: PodInfo[]; namespaces: NamespaceI
 
 function EventsTab() {
   const [page, setPage] = useState(1);
-  const { data } = useMonitoringEvents(page);
+  const { data, isError } = useMonitoringEvents(page);
+  if (isError) return <ErrorBanner message="Failed to load events" />;
   const events = data?.items ?? [];
   const total = data?.pagination?.total ?? 0;
   const totalPages = Math.ceil(total / 50);
@@ -1168,8 +1301,9 @@ function helmStatusVariant(status: string) {
 }
 
 function HelmTab() {
-  const { data: releases, isLoading } = useHelmReleases();
+  const { data: releases, isLoading, isError } = useHelmReleases();
 
+  if (isError) return <ErrorBanner message="Failed to load Helm releases" />;
   if (isLoading) return <LoadingScreen variant="detail" />;
 
   if (!releases || releases.length === 0) {
@@ -1192,8 +1326,7 @@ function HelmTab() {
                 </Badge>
               </div>
               <p className="text-xs text-muted-foreground">
-                {release.chart} v{release.version}
-                {release.app_version && ` · app v${release.app_version}`}
+                {release.chart} · revision {release.revision}
                 {release.updated && ` · updated ${timeAgo(release.updated)}`}
               </p>
             </div>
@@ -1207,8 +1340,9 @@ function HelmTab() {
 // ── DaemonSets Tab ──────────────────────────────────────────────
 
 function DaemonSetsTab() {
-  const { data: daemonsets, isLoading } = useDaemonSets();
+  const { data: daemonsets, isLoading, isError } = useDaemonSets();
 
+  if (isError) return <ErrorBanner message="Failed to load DaemonSets" />;
   if (isLoading) return <LoadingScreen variant="detail" />;
 
   if (!daemonsets || daemonsets.length === 0) {
@@ -1247,50 +1381,56 @@ function DaemonSetsTab() {
 // ── Alerts Tab ──────────────────────────────────────────────────
 
 function AlertsTab() {
-  const { data: activeData } = useActiveAlerts();
-  const resolve = useResolveAlert();
+  const { data: activeData, isError } = useActiveAlerts();
   const alerts = activeData?.alerts ?? [];
+
+  if (isError) return <ErrorBanner message="Failed to load alerts" />;
 
   return (
     <div className="mt-3 space-y-3">
       {alerts.length === 0 ? (
         <EmptyState icon={Activity} message="No active alerts" />
       ) : (
-        alerts.map((alert: MetricAlert) => (
-          <Card key={alert.id}>
-            <CardContent className="flex items-center gap-4 p-4">
-              <div
-                className={`h-2.5 w-2.5 shrink-0 rounded-full ${alert.severity === "critical" ? "bg-destructive" : "bg-yellow-500"}`}
-              />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium">{alert.rule_name}</span>
-                  <Badge
-                    variant={alert.severity === "critical" ? "destructive" : "warning"}
-                    className="text-xs"
-                  >
-                    {alert.severity}
-                  </Badge>
-                  <span className="text-xs text-muted-foreground">{alert.source_name}</span>
-                </div>
-                <p className="text-xs text-muted-foreground">{alert.message}</p>
-                <p className="text-xs text-muted-foreground">
-                  Fired {new Date(alert.fired_at).toLocaleString()}
-                </p>
-              </div>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => resolve.mutate(alert.id)}
-                disabled={resolve.isPending}
-              >
-                Resolve
-              </Button>
-            </CardContent>
-          </Card>
-        ))
+        alerts.map((alert: MetricAlert) => <AlertRow key={alert.id} alert={alert} />)
       )}
     </div>
+  );
+}
+
+function AlertRow({ alert }: { alert: MetricAlert }) {
+  const resolve = useResolveAlert();
+  return (
+    <Card>
+      <CardContent className="flex items-center gap-4 p-4">
+        <div
+          className={`h-2.5 w-2.5 shrink-0 rounded-full ${alert.severity === "critical" ? "bg-destructive" : "bg-yellow-500"}`}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">{alert.rule_name}</span>
+            <Badge
+              variant={alert.severity === "critical" ? "destructive" : "warning"}
+              className="text-xs"
+            >
+              {alert.severity}
+            </Badge>
+            <span className="text-xs text-muted-foreground">{alert.source_name}</span>
+          </div>
+          <p className="text-xs text-muted-foreground">{alert.message}</p>
+          <p className="text-xs text-muted-foreground">
+            Fired {new Date(alert.fired_at).toLocaleString()}
+          </p>
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => resolve.mutate(alert.id)}
+          disabled={resolve.isPending}
+        >
+          {resolve.isPending ? "..." : "Resolve"}
+        </Button>
+      </CardContent>
+    </Card>
   );
 }
 

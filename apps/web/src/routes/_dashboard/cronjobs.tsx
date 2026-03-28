@@ -186,7 +186,7 @@ function CreateCronJobDialog({
     cron_expression: "0 * * * *",
     command: "",
     image: "busybox:latest",
-    timezone: "UTC",
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
   });
 
   const update = (field: string, value: string) => setForm({ ...form, [field]: value });
@@ -200,7 +200,7 @@ function CreateCronJobDialog({
       cron_expression: "0 * * * *",
       command: "",
       image: "busybox:latest",
-      timezone: "UTC",
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
     });
   }
 
@@ -266,11 +266,26 @@ function CreateCronJobDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="UTC">UTC</SelectItem>
-                  <SelectItem value="Asia/Shanghai">Asia/Shanghai</SelectItem>
-                  <SelectItem value="America/New_York">America/New_York</SelectItem>
-                  <SelectItem value="Europe/London">Europe/London</SelectItem>
-                  <SelectItem value="Asia/Tokyo">Asia/Tokyo</SelectItem>
+                  <SelectItem value="UTC">UTC (+00:00)</SelectItem>
+                  <SelectItem value="Asia/Shanghai">Asia/Shanghai (+08:00)</SelectItem>
+                  <SelectItem value="Asia/Tokyo">Asia/Tokyo (+09:00)</SelectItem>
+                  <SelectItem value="Asia/Seoul">Asia/Seoul (+09:00)</SelectItem>
+                  <SelectItem value="Asia/Singapore">Asia/Singapore (+08:00)</SelectItem>
+                  <SelectItem value="Asia/Hong_Kong">Asia/Hong_Kong (+08:00)</SelectItem>
+                  <SelectItem value="Asia/Taipei">Asia/Taipei (+08:00)</SelectItem>
+                  <SelectItem value="Asia/Kolkata">Asia/Kolkata (+05:30)</SelectItem>
+                  <SelectItem value="Asia/Dubai">Asia/Dubai (+04:00)</SelectItem>
+                  <SelectItem value="Europe/London">Europe/London (+00:00)</SelectItem>
+                  <SelectItem value="Europe/Berlin">Europe/Berlin (+01:00)</SelectItem>
+                  <SelectItem value="Europe/Paris">Europe/Paris (+01:00)</SelectItem>
+                  <SelectItem value="Europe/Moscow">Europe/Moscow (+03:00)</SelectItem>
+                  <SelectItem value="America/New_York">America/New_York (-05:00)</SelectItem>
+                  <SelectItem value="America/Chicago">America/Chicago (-06:00)</SelectItem>
+                  <SelectItem value="America/Denver">America/Denver (-07:00)</SelectItem>
+                  <SelectItem value="America/Los_Angeles">America/Los_Angeles (-08:00)</SelectItem>
+                  <SelectItem value="America/Sao_Paulo">America/Sao_Paulo (-03:00)</SelectItem>
+                  <SelectItem value="Australia/Sydney">Australia/Sydney (+11:00)</SelectItem>
+                  <SelectItem value="Pacific/Auckland">Pacific/Auckland (+13:00)</SelectItem>
                 </SelectContent>
               </Select>
             </div>

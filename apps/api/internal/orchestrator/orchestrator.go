@@ -60,6 +60,7 @@ type AppManager interface {
 	Deploy(ctx context.Context, app *model.Application, opts DeployOpts) error
 	Rollback(ctx context.Context, app *model.Application, revision int64) error
 	Scale(ctx context.Context, app *model.Application, replicas int32) error
+	UpdateEnvVars(ctx context.Context, app *model.Application, envVars map[string]string) error
 	Restart(ctx context.Context, app *model.Application) error
 	Stop(ctx context.Context, app *model.Application) error
 	Delete(ctx context.Context, app *model.Application) error
@@ -122,6 +123,7 @@ type CronJobManager interface {
 	DeleteCronJob(ctx context.Context, cj *model.CronJob) error
 	SuspendCronJob(ctx context.Context, cj *model.CronJob, suspend bool) error
 	TriggerCronJob(ctx context.Context, cj *model.CronJob) (string, error) // returns job name
+	GetJobStatus(ctx context.Context, cj *model.CronJob, jobName string) (string, error)
 }
 
 // ConfigMapManager handles K8s ConfigMap lifecycle.
@@ -261,6 +263,7 @@ type AppStatus struct {
 
 type PodInfo struct {
 	Name         string            `json:"name"`
+	Namespace    string            `json:"namespace"`
 	Phase        string            `json:"phase"`
 	Node         string            `json:"node"`
 	IP           string            `json:"ip"`
@@ -290,8 +293,9 @@ type ContainerStatus struct {
 }
 
 type IngressStatus struct {
-	Ready   bool   `json:"ready"`
-	Message string `json:"message,omitempty"`
+	Ready      bool   `json:"ready"`
+	Message    string `json:"message,omitempty"`
+	CertSecret string `json:"cert_secret,omitempty"` // TLS secret name from ingress spec
 }
 
 type NodeInfo struct {
@@ -413,13 +417,12 @@ type BuildResult struct {
 }
 
 type HelmRelease struct {
-	Name       string `json:"name"`
-	Namespace  string `json:"namespace"`
-	Chart      string `json:"chart"`
-	Version    string `json:"version"`
-	AppVersion string `json:"app_version"`
-	Status     string `json:"status"`
-	Updated    string `json:"updated"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Chart     string `json:"chart"`
+	Revision  string `json:"revision"`
+	Status    string `json:"status"`
+	Updated   string `json:"updated"`
 }
 
 // CleanupInspector provides cluster cleanup operations.

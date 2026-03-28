@@ -102,15 +102,17 @@ func (s *SettingService) Set(ctx context.Context, key, value string) error {
 	}
 	s.logger.Info("setting updated", slog.String("key", key))
 
-	// Apply side effects — log errors but don't block the save
+	// Apply side effects — setting is saved, but warn caller if infra failed
 	switch key {
 	case model.SettingPanelDomain:
 		if err := s.applyPanelDomain(ctx, value); err != nil {
 			s.logger.Warn("panel domain saved but ingress not applied", slog.Any("error", err))
+			return fmt.Errorf("setting saved, but ingress not applied: %w", err)
 		}
 	case model.SettingHTTPSEmail:
 		if err := s.applyHTTPSEmail(ctx, value); err != nil {
 			s.logger.Warn("HTTPS email saved but not applied", slog.Any("error", err))
+			return fmt.Errorf("setting saved, but HTTPS config not applied: %w", err)
 		}
 	}
 

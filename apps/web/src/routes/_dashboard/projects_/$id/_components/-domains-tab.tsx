@@ -253,6 +253,12 @@ export function DomainsTab({ appId, domains }: { appId: string; domains: Domain[
               {addDomain.isPending ? "..." : "Add"}
             </Button>
           </form>
+          {newTLS && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              HTTPS uses Let's Encrypt via Traefik. If using Cloudflare proxy (orange cloud), set
+              SSL mode to "Full (strict)" and disable proxy during initial cert issuance.
+            </p>
+          )}
         </CardContent>
       </Card>
 

@@ -26,6 +26,7 @@ type User struct {
 	AvatarURL    string `bun:"avatar_url" json:"avatar_url,omitempty"`
 	TwoFASecret  string `bun:"two_fa_secret,default:''" json:"-"`
 	TwoFAEnabled bool   `bun:"two_fa_enabled,default:false" json:"two_fa_enabled"`
+	TokenVersion int    `bun:"token_version,default:0" json:"-"` // incremented on password change / 2FA enable to invalidate refresh tokens
 }
 
 // PredefinedAvatars is the list of available avatar keys.

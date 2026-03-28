@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"time"
 
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/driver/pgdriver"
@@ -13,35 +14,24 @@ const channel = "sailbox_changes"
 
 // PGSubscriber listens to PG NOTIFY on the sailbox_changes channel
 // and exposes a Go channel of Change events.
+// It automatically reconnects if the database connection is lost.
 type PGSubscriber struct {
-	ln     *pgdriver.Listener
-	ch     <-chan pgdriver.Notification
+	db     *bun.DB
 	out    chan Change
 	logger *slog.Logger
+	done   chan struct{}
 }
 
-// NewPGSubscriber creates a subscriber backed by pgdriver.Listener.
-// It starts listening immediately in a background goroutine.
+// NewPGSubscriber creates a subscriber that auto-reconnects on failure.
 func NewPGSubscriber(db *bun.DB, logger *slog.Logger) (*PGSubscriber, error) {
-	ln := pgdriver.NewListener(db)
-
-	if err := ln.Listen(context.Background(), channel); err != nil {
-		ln.Close()
-		return nil, err
-	}
-
-	// pgdriver.Channel returns a buffered Go channel that handles reconnects internally.
-	notifications := ln.Channel()
-	out := make(chan Change, 128)
-
 	s := &PGSubscriber{
-		ln:     ln,
-		ch:     notifications,
-		out:    out,
+		db:     db,
+		out:    make(chan Change, 128),
 		logger: logger,
+		done:   make(chan struct{}),
 	}
 
-	go s.loop()
+	go s.connectLoop()
 	return s, nil
 }
 
@@ -50,30 +40,70 @@ func (s *PGSubscriber) Changes() <-chan Change {
 	return s.out
 }
 
-// Close stops the listener and closes the output channel.
+// Close stops the subscriber.
 func (s *PGSubscriber) Close() error {
-	err := s.ln.Close()
-	// out channel will be closed by the loop goroutine when ln.Channel() closes
-	return err
+	close(s.done)
+	return nil
 }
 
-func (s *PGSubscriber) loop() {
+func (s *PGSubscriber) connectLoop() {
 	defer close(s.out)
 
-	for notification := range s.ch {
-		var change Change
-		if err := json.Unmarshal([]byte(notification.Payload), &change); err != nil {
-			s.logger.Warn("invalid NOTIFY payload",
-				slog.String("payload", notification.Payload),
-				slog.Any("error", err),
-			)
-			continue
+	backoff := time.Second
+	for {
+		select {
+		case <-s.done:
+			return
+		default:
+		}
+
+		if err := s.listen(); err != nil {
+			s.logger.Warn("PG listener disconnected, reconnecting...", slog.Any("error", err), slog.Duration("backoff", backoff))
 		}
 
 		select {
-		case s.out <- change:
-		default:
-			s.logger.Warn("change event dropped (slow consumer)")
+		case <-s.done:
+			return
+		case <-time.After(backoff):
+		}
+
+		// Exponential backoff: 1s, 2s, 4s, 8s, max 30s
+		backoff *= 2
+		if backoff > 30*time.Second {
+			backoff = 30 * time.Second
+		}
+	}
+}
+
+func (s *PGSubscriber) listen() error {
+	ln := pgdriver.NewListener(s.db)
+	defer ln.Close()
+
+	if err := ln.Listen(context.Background(), channel); err != nil {
+		return err
+	}
+
+	s.logger.Info("PG NOTIFY listener connected")
+
+	notifications := ln.Channel()
+	for {
+		select {
+		case <-s.done:
+			return nil
+		case notification, ok := <-notifications:
+			if !ok {
+				return nil // channel closed, reconnect
+			}
+			var change Change
+			if err := json.Unmarshal([]byte(notification.Payload), &change); err != nil {
+				s.logger.Warn("invalid NOTIFY payload", slog.String("payload", notification.Payload), slog.Any("error", err))
+				continue
+			}
+			select {
+			case s.out <- change:
+			default:
+				s.logger.Warn("change event dropped (slow consumer)")
+			}
 		}
 	}
 }

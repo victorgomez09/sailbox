@@ -16,13 +16,14 @@ import (
 
 // RouterDeps holds dependencies required by the router.
 type RouterDeps struct {
-	Services   *service.Container
-	JWTManager *auth.JWTManager
-	Orch       orchestrator.Orchestrator
-	Store      store.Store
-	SSEBroker  *ws.SSEBroker
-	AppURL     string // Public URL of the Sailbox instance
-	Logger     *slog.Logger
+	Services    *service.Container
+	JWTManager  *auth.JWTManager
+	Orch        orchestrator.Orchestrator
+	Store       store.Store
+	SSEBroker   *ws.SSEBroker
+	AppURL      string // Public URL of the Sailbox instance
+	SetupSecret string // Secret for unauthenticated setup operations
+	Logger      *slog.Logger
 }
 
 // NewRouter creates and configures the Gin engine with all routes.
@@ -32,10 +33,11 @@ func NewRouter(deps *RouterDeps) *gin.Engine {
 
 	// Global middleware
 	r.Use(
+		middleware.Recovery(deps.Logger),
+		middleware.Sentry(),
 		middleware.Branding(),
 		middleware.RequestID(),
 		middleware.Logger(deps.Logger),
-		middleware.Recovery(deps.Logger),
 		middleware.CORS(),
 	)
 
@@ -80,10 +82,12 @@ func NewRouter(deps *RouterDeps) *gin.Engine {
 		apiV1.POST("/webhooks/github/:appId", webhookHandler.GitHub)
 		apiV1.POST("/webhooks/gitlab/:appId", webhookHandler.GitLab)
 
-		// System restore (public - only works on uninitialized system, verified in service layer)
+		// System restore (requires setup secret + only works on uninitialized system)
+		restoreRL := middleware.RateLimit(5, 5*time.Minute)
+		setupAuth := middleware.RequireSetupSecret(deps.SetupSecret)
 		sysBackupPublic := v1.NewSystemBackupHandler(deps.Services.SystemBackup)
-		apiV1.POST("/system/restore/scan", sysBackupPublic.ScanS3Backups)
-		apiV1.POST("/system/restore/execute", sysBackupPublic.RestoreFromS3)
+		apiV1.POST("/system/restore/scan", restoreRL, setupAuth, sysBackupPublic.ScanS3Backups)
+		apiV1.POST("/system/restore/execute", restoreRL, setupAuth, sysBackupPublic.RestoreFromS3)
 
 		// Protected routes
 		protected := apiV1.Group("")

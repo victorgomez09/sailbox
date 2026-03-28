@@ -1,5 +1,5 @@
 import { Activity, Cpu, HardDrive, MemoryStick, RefreshCw } from "lucide-react";
-import { useEffect } from "react";
+
 import {
   Area,
   AreaChart,
@@ -315,12 +315,6 @@ export function MonitoringTab({ app, appId }: { app: App; appId: string }) {
 
   // Fetch persistent metrics from DB (includes build pod resources)
   const { data: snapshots } = useMonitoringSnapshots("app", appId, 10);
-
-  // Refresh pods for live resource display (metrics-server updates ~15s)
-  useEffect(() => {
-    const id = setInterval(() => refetchPods(), 15_000);
-    return () => clearInterval(id);
-  }, [refetchPods]);
 
   // Transform DB snapshots to chart data
   const cpuData: ChartData[] = (snapshots ?? []).map((m) => ({

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"crypto/subtle"
 	"strings"
 	"sync"
 	"time"
@@ -137,5 +138,24 @@ func RequireRole(roles ...string) gin.HandlerFunc {
 			"status": 403,
 			"detail": "insufficient permissions",
 		})
+	}
+}
+
+// RequireSetupSecret validates the X-Setup-Secret header against the configured secret.
+// Used to protect unauthenticated setup-only endpoints (e.g. system restore).
+func RequireSetupSecret(secret string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		provided := c.GetHeader("X-Setup-Secret")
+		if provided == "" {
+			httputil.RespondError(c, apierr.ErrUnauthorized.WithDetail("setup secret required"))
+			c.Abort()
+			return
+		}
+		if subtle.ConstantTimeCompare([]byte(provided), []byte(secret)) != 1 {
+			httputil.RespondError(c, apierr.ErrForbidden.WithDetail("invalid setup secret"))
+			c.Abort()
+			return
+		}
+		c.Next()
 	}
 }

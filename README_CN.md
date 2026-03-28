@@ -46,7 +46,7 @@
 ## 快速开始
 
 ```bash
-curl -sSL https://get.sailbox.dev | sh
+curl -sSL https://get.sailbox.dev | sudo sh
 ```
 
 安装完成后打开 `http://<服务器IP>:3000`，开始使用。
@@ -54,7 +54,7 @@ curl -sSL https://get.sailbox.dev | sh
 **升级：**
 
 ```bash
-docker compose -f /opt/sailbox/docker-compose.yml pull && docker compose -f /opt/sailbox/docker-compose.yml up -d
+curl -sSL https://get.sailbox.dev/upgrade | sudo sh
 ```
 
 > **环境要求：** Linux（x86_64 / arm64），最低 2 核 CPU、2 GB 内存。VPS、裸金属、树莓派均可。

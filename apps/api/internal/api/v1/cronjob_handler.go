@@ -41,7 +41,7 @@ func (h *CronJobHandler) Create(c *gin.Context) {
 	}
 	cj, err := h.svc.Create(c.Request.Context(), input)
 	if err != nil {
-		httputil.RespondError(c, err)
+		httputil.RespondError(c, apierr.ErrBadRequest.WithDetail(err.Error()))
 		return
 	}
 	httputil.RespondCreated(c, cj, fmt.Sprintf("/api/v1/cronjobs/%s", cj.ID))

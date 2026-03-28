@@ -178,8 +178,7 @@ function UpgradeButton({
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const pullCmd = `docker pull ghcr.io/sailboxhq/sailbox:${v.latest}`;
-  const upCmd = "docker compose up -d";
+  const upgradeCmd = `curl -sSL https://get.sailbox.dev/upgrade | sudo sh`;
 
   const changelogLines = (v.changelog || "")
     .split("\n")
@@ -187,7 +186,7 @@ function UpgradeButton({
     .slice(0, 5);
 
   function copyCommand() {
-    navigator.clipboard.writeText(`${pullCmd} && ${upCmd}`);
+    navigator.clipboard.writeText(upgradeCmd);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
@@ -308,19 +307,8 @@ function UpgradeButton({
                 <h3 className="mb-2 text-sm font-semibold">Manual Upgrade</h3>
                 <div className="space-y-2">
                   <div className="flex items-center gap-3">
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
-                      1
-                    </span>
                     <code className="flex-1 rounded bg-muted px-2.5 py-1.5 font-mono text-xs">
-                      {pullCmd}
-                    </code>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
-                      2
-                    </span>
-                    <code className="flex-1 rounded bg-muted px-2.5 py-1.5 font-mono text-xs">
-                      {upCmd}
+                      {upgradeCmd}
                     </code>
                   </div>
                   <div className="flex items-center gap-3">
@@ -328,7 +316,7 @@ function UpgradeButton({
                       ✓
                     </span>
                     <span className="text-xs text-muted-foreground">
-                      Database migrations run automatically on startup.
+                      Handles backup, image pull, version update, and health check automatically.
                     </span>
                   </div>
                 </div>

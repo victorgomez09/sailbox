@@ -114,6 +114,11 @@ func (o *Orchestrator) CreateIngress(ctx context.Context, domain *model.Domain, 
 		return fmt.Errorf("create ingress: %w", err)
 	}
 
+	// Populate CertSecret so the caller can persist it for cert expiry checks
+	if domain.TLS && !isDevDomain(domain.Host) {
+		domain.CertSecret = fmt.Sprintf("%s-tls", name)
+	}
+
 	o.logger.Info("ingress created", slog.String("host", domain.Host), slog.String("ns", ns))
 	return nil
 }
@@ -305,7 +310,12 @@ func (o *Orchestrator) GetIngressStatus(ctx context.Context, domain *model.Domai
 	}
 	ing := ingresses.Items[0]
 	ready := len(ing.Status.LoadBalancer.Ingress) > 0
-	return &orchestrator.IngressStatus{Ready: ready}, nil
+	// Extract TLS secret name if present
+	certSecret := ""
+	if len(ing.Spec.TLS) > 0 {
+		certSecret = ing.Spec.TLS[0].SecretName
+	}
+	return &orchestrator.IngressStatus{Ready: ready, CertSecret: certSecret}, nil
 }
 
 func (o *Orchestrator) GetCertExpiry(ctx context.Context, domain *model.Domain, app *model.Application) (*time.Time, error) {

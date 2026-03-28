@@ -37,6 +37,7 @@ func NewContainer(
 	jwtManager *auth.JWTManager,
 	logger *slog.Logger,
 	dbURL string,
+	setupSecret string,
 ) *Container {
 	settingSvc := NewSettingService(s, orch, logger)
 	notifSvc := NewNotificationService(s, settingSvc, logger)
@@ -53,7 +54,7 @@ func NewContainer(
 		Template:     NewTemplateService(s, orch, logger),
 		Domain:       domainSvc,
 		Setting:      settingSvc,
-		Node:         NewNodeService(s, orch, logger),
+		Node:         NewNodeService(s, orch, logger, setupSecret),
 		Resource:     NewResourceService(s, logger),
 		Metrics:      NewMetricsCollector(metricsStore, s, orch, logger, notifSvc),
 		CronJob:      NewCronJobService(s, orch, logger),

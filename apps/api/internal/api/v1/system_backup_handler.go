@@ -36,7 +36,7 @@ func (h *SystemBackupHandler) SaveConfig(c *gin.Context) {
 		return
 	}
 	if err := h.svc.SaveConfig(c.Request.Context(), &input); err != nil {
-		httputil.RespondError(c, err)
+		httputil.RespondError(c, apierr.ErrBadRequest.WithDetail(err.Error()))
 		return
 	}
 	httputil.RespondOK(c, gin.H{"status": "saved"})
@@ -86,7 +86,7 @@ func (h *SystemBackupHandler) ScanS3Backups(c *gin.Context) {
 
 	files, err := h.svc.ScanS3Backups(c.Request.Context(), s3Config, input.Path)
 	if err != nil {
-		httputil.RespondError(c, err)
+		httputil.RespondError(c, apierr.ErrBadRequest.WithDetail(err.Error()))
 		return
 	}
 	httputil.RespondOK(c, files)

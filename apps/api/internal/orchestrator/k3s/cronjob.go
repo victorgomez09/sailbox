@@ -219,5 +219,23 @@ func (o *Orchestrator) TriggerCronJob(ctx context.Context, cj *model.CronJob) (s
 	return jobName, nil
 }
 
+func (o *Orchestrator) GetJobStatus(ctx context.Context, cj *model.CronJob, jobName string) (string, error) {
+	ns := cronJobNamespace(cj)
+	job, err := o.client.BatchV1().Jobs(ns).Get(ctx, jobName, metav1.GetOptions{})
+	if err != nil {
+		return "", err
+	}
+
+	for _, cond := range job.Status.Conditions {
+		if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
+			return "succeeded", nil
+		}
+		if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
+			return "failed", nil
+		}
+	}
+	return "running", nil
+}
+
 // ── Unused import guard ─────────────────────────────────────────
 var _ = resource.MustParse

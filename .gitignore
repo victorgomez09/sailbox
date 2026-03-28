@@ -50,3 +50,4 @@ bun.lock
 
 # Claude Code
 .claude/
+deploy/kubeconfig/

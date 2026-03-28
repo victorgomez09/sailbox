@@ -36,6 +36,11 @@ func (n *NoopOrchestrator) Scale(ctx context.Context, app *model.Application, re
 	return nil
 }
 
+func (n *NoopOrchestrator) UpdateEnvVars(ctx context.Context, app *model.Application, envVars map[string]string) error {
+	n.logger.Info("[noop] update env vars", slog.String("app", app.Name), slog.Int("count", len(envVars)))
+	return nil
+}
+
 func (n *NoopOrchestrator) Restart(ctx context.Context, app *model.Application) error {
 	n.logger.Info("[noop] restart", slog.String("app", app.Name))
 	return nil
@@ -492,6 +497,11 @@ func (n *NoopOrchestrator) TriggerCronJob(ctx context.Context, cj *model.CronJob
 	return fmt.Sprintf("%s-manual-%d", cj.Name, time.Now().Unix()), nil
 }
 
+func (n *NoopOrchestrator) GetJobStatus(ctx context.Context, cj *model.CronJob, jobName string) (string, error) {
+	n.logger.Info("[noop] get job status", slog.String("job", jobName))
+	return "succeeded", nil
+}
+
 // ── ConfigMapManager ────────────────────────────────────────────
 
 func (n *NoopOrchestrator) EnsureConfigMap(ctx context.Context, namespace, name string, data map[string]string) error {
@@ -559,7 +569,7 @@ func (n *NoopOrchestrator) UpdateTraefikConfig(ctx context.Context, yaml string)
 func (n *NoopOrchestrator) GetHelmReleases(ctx context.Context) ([]HelmRelease, error) {
 	n.logger.Info("[noop] get helm releases")
 	return []HelmRelease{
-		{Name: "traefik", Namespace: "kube-system", Chart: "traefik", Version: "1", Status: "deployed", Updated: "2026-03-25 12:00:00"},
+		{Name: "traefik", Namespace: "kube-system", Chart: "traefik", Revision: "1", Status: "deployed", Updated: "2026-03-25 12:00:00"},
 	}, nil
 }
 

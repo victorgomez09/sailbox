@@ -59,6 +59,7 @@ func init() {
 				last_name VARCHAR(100) DEFAULT '',
 				two_fa_secret VARCHAR(255) DEFAULT '',
 				two_fa_enabled BOOLEAN DEFAULT false,
+				token_version INTEGER DEFAULT 0,
 				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 				deleted_at TIMESTAMPTZ
@@ -329,6 +330,7 @@ func init() {
 				status VARCHAR(20) DEFAULT 'pending',
 				status_msg TEXT DEFAULT '',
 				k8s_node_name VARCHAR(255) DEFAULT '',
+				host_key_fingerprint TEXT DEFAULT '',
 				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 				deleted_at TIMESTAMPTZ

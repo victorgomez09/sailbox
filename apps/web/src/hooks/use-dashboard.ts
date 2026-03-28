@@ -16,10 +16,7 @@ export function useDashboardApps() {
       if (!projects?.length) return [];
       const results = await Promise.all(
         projects.map((p) =>
-          api
-            .get<{ items: App[] }>(`/api/v1/projects/${p.id}/apps`)
-            .then((r) => r.items ?? [])
-            .catch(() => []),
+          api.get<{ items: App[] }>(`/api/v1/projects/${p.id}/apps`).then((r) => r.items ?? []),
         ),
       );
       return results.flat();
@@ -43,8 +40,7 @@ export function useDashboardDatabases() {
         projects.map((p) =>
           api
             .get<{ items: ManagedDB[] }>(`/api/v1/projects/${p.id}/databases`)
-            .then((r) => r.items ?? [])
-            .catch(() => []),
+            .then((r) => r.items ?? []),
         ),
       );
       return results.flat();

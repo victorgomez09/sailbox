@@ -46,6 +46,18 @@ func (o *Orchestrator) CreateVolume(ctx context.Context, opts orchestrator.Volum
 }
 
 func (o *Orchestrator) DeleteVolume(ctx context.Context, name, namespace string) error {
+	// Check if any pod is currently mounting this PVC
+	pods, err := o.client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+	if err == nil {
+		for _, pod := range pods.Items {
+			for _, vol := range pod.Spec.Volumes {
+				if vol.PersistentVolumeClaim != nil && vol.PersistentVolumeClaim.ClaimName == name {
+					return fmt.Errorf("PVC %s/%s is in use by pod %s — stop the workload first", namespace, name, pod.Name)
+				}
+			}
+		}
+	}
+
 	if err := o.client.CoreV1().PersistentVolumeClaims(namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
 		return fmt.Errorf("delete PVC %s/%s: %w", namespace, name, err)
 	}

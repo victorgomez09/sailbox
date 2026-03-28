@@ -97,6 +97,17 @@ func (s *AppService) Create(ctx context.Context, input CreateAppInput) (*model.A
 	}
 	app.Namespace = project.Namespace
 
+	// Validate git provider belongs to same org
+	if app.GitProviderID != nil {
+		res, err := s.store.SharedResources().GetByID(ctx, *app.GitProviderID)
+		if err != nil {
+			return nil, fmt.Errorf("git provider not found: %w", err)
+		}
+		if res.OrgID != project.OrgID {
+			return nil, fmt.Errorf("git provider does not belong to this organization")
+		}
+	}
+
 	if err := s.store.Applications().Create(ctx, app); err != nil {
 		return nil, err
 	}
@@ -156,10 +167,19 @@ func guessContainerPort(image string) int {
 }
 
 type UpdateAppInput struct {
+	// Source configuration
+	GitRepo     *string `json:"git_repo"`
+	GitBranch   *string `json:"git_branch"`
+	DockerImage *string `json:"docker_image"`
+
 	// Build configuration
+	BuildType    *string           `json:"build_type"`
 	Dockerfile   *string           `json:"dockerfile"`
+	BuildContext *string           `json:"build_context"`
 	BuildArgs    map[string]string `json:"build_args"`
 	BuildEnvVars map[string]string `json:"build_env_vars"`
+	WatchPaths   []string          `json:"watch_paths"`
+	NoCache      *bool             `json:"no_cache"`
 
 	// Runtime configuration
 	CPULimit   *string             `json:"cpu_limit"`
@@ -167,6 +187,7 @@ type UpdateAppInput struct {
 	CPURequest *string             `json:"cpu_request"`
 	MemRequest *string             `json:"mem_request"`
 	Ports      []model.PortMapping `json:"ports"`
+	NodePool   *string             `json:"node_pool"`
 
 	// Advanced configuration
 	HealthCheck            *model.HealthCheck          `json:"health_check"`
@@ -183,9 +204,29 @@ func (s *AppService) Update(ctx context.Context, id uuid.UUID, input UpdateAppIn
 		return nil, err
 	}
 
-	// Apply non-nil fields
+	// Track whether runtime-affecting fields changed (need K8s deployment update)
+	runtimeChanged := false
+
+	// Apply source fields
+	if input.GitRepo != nil {
+		app.GitRepo = *input.GitRepo
+	}
+	if input.GitBranch != nil {
+		app.GitBranch = *input.GitBranch
+	}
+	if input.DockerImage != nil {
+		app.DockerImage = *input.DockerImage
+	}
+
+	// Apply build fields
+	if input.BuildType != nil {
+		app.BuildType = model.BuildType(*input.BuildType)
+	}
 	if input.Dockerfile != nil {
 		app.Dockerfile = *input.Dockerfile
+	}
+	if input.BuildContext != nil {
+		app.BuildContext = *input.BuildContext
 	}
 	if input.BuildArgs != nil {
 		app.BuildArgs = input.BuildArgs
@@ -193,38 +234,60 @@ func (s *AppService) Update(ctx context.Context, id uuid.UUID, input UpdateAppIn
 	if input.BuildEnvVars != nil {
 		app.BuildEnvVars = input.BuildEnvVars
 	}
+	if input.WatchPaths != nil {
+		app.WatchPaths = input.WatchPaths
+	}
+	if input.NoCache != nil {
+		app.NoCache = *input.NoCache
+	}
+
+	// Apply runtime fields (these affect the live K8s deployment)
 	if input.CPULimit != nil {
 		app.CPULimit = *input.CPULimit
+		runtimeChanged = true
 	}
 	if input.MemLimit != nil {
 		app.MemLimit = *input.MemLimit
+		runtimeChanged = true
 	}
 	if input.CPURequest != nil {
 		app.CPURequest = *input.CPURequest
+		runtimeChanged = true
 	}
 	if input.MemRequest != nil {
 		app.MemRequest = *input.MemRequest
+		runtimeChanged = true
 	}
 	if input.Ports != nil {
 		app.Ports = input.Ports
+		runtimeChanged = true
+	}
+	if input.NodePool != nil {
+		app.NodePool = *input.NodePool
+		runtimeChanged = true
 	}
 	if input.HealthCheck != nil {
 		app.HealthCheck = input.HealthCheck
+		runtimeChanged = true
 	}
 	if input.Autoscaling != nil {
 		app.Autoscaling = input.Autoscaling
 	}
 	if input.Volumes != nil {
 		app.Volumes = input.Volumes
+		runtimeChanged = true
 	}
 	if input.DeployStrategy != nil {
 		app.DeployStrategy = *input.DeployStrategy
+		runtimeChanged = true
 	}
 	if input.DeployStrategyConfig != nil {
 		app.DeployStrategyConfig = input.DeployStrategyConfig
+		runtimeChanged = true
 	}
 	if input.TerminationGracePeriod != nil {
 		app.TerminationGracePeriod = *input.TerminationGracePeriod
+		runtimeChanged = true
 	}
 
 	if err := s.store.Applications().Update(ctx, app); err != nil {
@@ -241,6 +304,39 @@ func (s *AppService) Update(ctx context.Context, id uuid.UUID, input UpdateAppIn
 			if err := s.orch.DeleteHPA(ctx, app); err != nil {
 				s.logger.Error("failed to delete HPA", slog.Any("error", err))
 			}
+		}
+	}
+
+	// Redeploy if runtime-affecting fields changed and app is currently deployed
+	if runtimeChanged && app.Status == model.AppStatusRunning {
+		mergedEnv := make(map[string]string)
+		project, projErr := s.store.Projects().GetByID(ctx, app.ProjectID)
+		if projErr == nil && project.EnvVars != nil {
+			for k, v := range project.EnvVars {
+				mergedEnv[k] = v
+			}
+		}
+		for k, v := range app.EnvVars {
+			mergedEnv[k] = v
+		}
+		if err := s.orch.Deploy(ctx, app, orchestrator.DeployOpts{
+			Image:                  app.DockerImage,
+			Replicas:               app.Replicas,
+			EnvVars:                mergedEnv,
+			Ports:                  app.Ports,
+			CPULimit:               app.CPULimit,
+			MemLimit:               app.MemLimit,
+			CPURequest:             app.CPURequest,
+			MemRequest:             app.MemRequest,
+			HealthCheck:            app.HealthCheck,
+			Volumes:                app.Volumes,
+			DeployStrategy:         app.DeployStrategy,
+			DeployStrategyConfig:   app.DeployStrategyConfig,
+			TerminationGracePeriod: app.TerminationGracePeriod,
+			NodePool:               app.NodePool,
+		}); err != nil {
+			s.logger.Warn("failed to apply runtime changes to deployment — will take effect on next deploy",
+				slog.String("app", app.Name), slog.Any("error", err))
 		}
 	}
 
@@ -316,6 +412,23 @@ func (s *AppService) UpdateEnvVars(ctx context.Context, id uuid.UUID, envVars ma
 	if err := s.store.Applications().Update(ctx, app); err != nil {
 		return nil, err
 	}
+
+	// Merge project env + app env and push to running deployment
+	mergedEnv := make(map[string]string)
+	project, projErr := s.store.Projects().GetByID(ctx, app.ProjectID)
+	if projErr == nil && project.EnvVars != nil {
+		for k, v := range project.EnvVars {
+			mergedEnv[k] = v
+		}
+	}
+	for k, v := range app.EnvVars {
+		mergedEnv[k] = v
+	}
+	if err := s.orch.UpdateEnvVars(ctx, app, mergedEnv); err != nil {
+		s.logger.Warn("failed to push env vars to deployment — will take effect on next deploy",
+			slog.String("app", app.Name), slog.Any("error", err))
+	}
+
 	s.logger.Info("env vars updated", slog.String("app", app.Name), slog.Int("count", len(envVars)))
 	return app, nil
 }

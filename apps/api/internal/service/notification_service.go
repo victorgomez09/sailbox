@@ -3,10 +3,12 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/smtp"
 	"strings"
@@ -187,13 +189,7 @@ func (s *NotificationService) TestSMTP(ctx context.Context) error {
 	body := fmt.Sprintf("Subject: %s\r\nFrom: %s\r\nTo: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\nThis is a test email from Sailbox.",
 		subject, cfg.From, cfg.From)
 
-	addr := fmt.Sprintf("%s:%s", cfg.Host, cfg.Port)
-	var auth smtp.Auth
-	if cfg.User != "" {
-		auth = smtp.PlainAuth("", cfg.User, cfg.Password, cfg.Host)
-	}
-
-	return smtp.SendMail(addr, auth, cfg.From, []string{cfg.From}, []byte(body))
+	return dialAndSendSMTP(cfg, cfg.From, []string{cfg.From}, []byte(body))
 }
 
 func (s *NotificationService) sendToChannel(ctx context.Context, ch *model.NotificationChannel, title, message, severity string) error {
@@ -241,13 +237,79 @@ func (s *NotificationService) sendEmail(ctx context.Context, ch *model.Notificat
 	body := fmt.Sprintf("Subject: %s\r\nFrom: %s\r\nTo: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s",
 		subject, cfg.From, strings.Join(recipients, ", "), message)
 
+	return dialAndSendSMTP(cfg, cfg.From, recipients, []byte(body))
+}
+
+// dialAndSendSMTP connects to the SMTP server with timeout, supporting both
+// implicit TLS (port 465) and STARTTLS (port 587/25).
+func dialAndSendSMTP(cfg *SMTPConfig, from string, to []string, msg []byte) error {
 	addr := fmt.Sprintf("%s:%s", cfg.Host, cfg.Port)
-	var auth smtp.Auth
-	if cfg.User != "" {
-		auth = smtp.PlainAuth("", cfg.User, cfg.Password, cfg.Host)
+	timeout := 15 * time.Second
+
+	var conn net.Conn
+	var err error
+
+	if cfg.Port == "465" {
+		// Implicit TLS (SMTPS)
+		dialer := &net.Dialer{Timeout: timeout}
+		conn, err = tls.DialWithDialer(dialer, "tcp", addr, &tls.Config{ServerName: cfg.Host})
+	} else {
+		// Plain connection (STARTTLS will be negotiated)
+		conn, err = net.DialTimeout("tcp", addr, timeout)
+	}
+	if err != nil {
+		return fmt.Errorf("dial %s: %w", addr, err)
 	}
 
-	return smtp.SendMail(addr, auth, cfg.From, recipients, []byte(body))
+	client, err := smtp.NewClient(conn, cfg.Host)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("smtp client: %w", err)
+	}
+	defer client.Close()
+
+	// STARTTLS for non-465 ports
+	tlsUpgraded := cfg.Port == "465" // implicit TLS is already encrypted
+	if cfg.Port != "465" {
+		if ok, _ := client.Extension("STARTTLS"); ok {
+			if err := client.StartTLS(&tls.Config{ServerName: cfg.Host}); err != nil {
+				return fmt.Errorf("starttls: %w", err)
+			}
+			tlsUpgraded = true
+		}
+	}
+
+	// Auth — refuse to send credentials over unencrypted connection
+	if cfg.User != "" {
+		if !tlsUpgraded {
+			return fmt.Errorf("SMTP server does not support STARTTLS — refusing to send credentials over plaintext (use port 465 for implicit TLS)")
+		}
+		auth := smtp.PlainAuth("", cfg.User, cfg.Password, cfg.Host)
+		if err := client.Auth(auth); err != nil {
+			return fmt.Errorf("auth: %w", err)
+		}
+	}
+
+	// Send
+	if err := client.Mail(from); err != nil {
+		return fmt.Errorf("mail from: %w", err)
+	}
+	for _, rcpt := range to {
+		if err := client.Rcpt(rcpt); err != nil {
+			return fmt.Errorf("rcpt to %s: %w", rcpt, err)
+		}
+	}
+	w, err := client.Data()
+	if err != nil {
+		return fmt.Errorf("data: %w", err)
+	}
+	if _, err := w.Write(msg); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("close data: %w", err)
+	}
+	return client.Quit()
 }
 
 // httpPostWithRetry performs an HTTP POST, retrying once after a brief backoff on 429.

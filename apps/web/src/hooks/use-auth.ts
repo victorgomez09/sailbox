@@ -71,6 +71,8 @@ export function useSetupStatus() {
   return useQuery({
     queryKey: ["auth", "setup-status"],
     queryFn: () => api.get<{ initialized: boolean }>("/api/v1/auth/setup-status"),
+    staleTime: 0,
+    gcTime: 0,
   });
 }
 

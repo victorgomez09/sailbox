@@ -32,7 +32,15 @@ type CreateDomainInput struct {
 	AutoCert bool   `json:"auto_cert"`
 }
 
+func normalizeDomainHost(host string) string {
+	host = strings.TrimSpace(host)
+	host = strings.ToLower(host)
+	host = strings.TrimRight(host, ".")
+	return host
+}
+
 func (s *DomainService) Create(ctx context.Context, appID uuid.UUID, input CreateDomainInput) (*model.Domain, error) {
+	input.Host = normalizeDomainHost(input.Host)
 	existing, _ := s.store.Domains().GetByHost(ctx, input.Host)
 	if existing != nil && existing.ID != uuid.Nil {
 		return nil, errors.New("domain already in use")
@@ -58,6 +66,12 @@ func (s *DomainService) Create(ctx context.Context, appID uuid.UUID, input Creat
 		// Rollback DB record if Ingress creation fails
 		_ = s.store.Domains().Delete(ctx, domain.ID)
 		return nil, fmt.Errorf("create ingress failed: %w", err)
+	}
+
+	// Sync initial ingress status
+	if status, sErr := s.orch.GetIngressStatus(ctx, domain, app); sErr == nil {
+		domain.IngressReady = status.Ready
+		_ = s.store.Domains().Update(ctx, domain)
 	}
 
 	s.logger.Info("domain created", slog.String("host", domain.Host), slog.String("app", app.Name))
@@ -117,6 +131,12 @@ func (s *DomainService) GenerateTraefikDomain(ctx context.Context, appID uuid.UU
 		return nil, fmt.Errorf("create ingress failed: %w", err)
 	}
 
+	// Sync ingress status and cert secret
+	if status, sErr := s.orch.GetIngressStatus(ctx, domain, app); sErr == nil {
+		domain.IngressReady = status.Ready
+	}
+	_ = s.store.Domains().Update(ctx, domain)
+
 	s.logger.Info("generated traefik domain", slog.String("host", host))
 	return domain, nil
 }
@@ -134,6 +154,10 @@ func (s *DomainService) Update(ctx context.Context, id uuid.UUID, host *string, 
 
 	hostChanged := false
 	oldHost := domain.Host
+	if host != nil && *host != "" {
+		normalized := normalizeDomainHost(*host)
+		host = &normalized
+	}
 	if host != nil && *host != "" && *host != domain.Host {
 		domain.Host = *host
 		hostChanged = true
@@ -173,7 +197,49 @@ func (s *DomainService) Update(ctx context.Context, id uuid.UUID, host *string, 
 }
 
 func (s *DomainService) ListByApp(ctx context.Context, appID uuid.UUID) ([]model.Domain, error) {
-	return s.store.Domains().ListByApp(ctx, appID)
+	domains, err := s.store.Domains().ListByApp(ctx, appID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Sync live ingress/cert status from K8s
+	app, appErr := s.store.Applications().GetByID(ctx, appID)
+	if appErr != nil {
+		return domains, nil // return stale data if app lookup fails
+	}
+	for i := range domains {
+		changed := false
+
+		// Check ingress ready
+		status, sErr := s.orch.GetIngressStatus(ctx, &domains[i], app)
+		if sErr == nil && status.Ready != domains[i].IngressReady {
+			domains[i].IngressReady = status.Ready
+			changed = true
+		}
+
+		// Backfill CertSecret from ingress TLS spec if missing (upgrade compat)
+		if domains[i].TLS && domains[i].CertSecret == "" {
+			if status != nil && status.CertSecret != "" {
+				domains[i].CertSecret = status.CertSecret
+				changed = true
+			}
+		}
+
+		// Check cert expiry
+		if domains[i].TLS && domains[i].CertSecret != "" {
+			expiry, cErr := s.orch.GetCertExpiry(ctx, &domains[i], app)
+			if cErr == nil && expiry != nil {
+				domains[i].CertExpiry = expiry
+				changed = true
+			}
+		}
+
+		if changed {
+			_ = s.store.Domains().Update(ctx, &domains[i])
+		}
+	}
+
+	return domains, nil
 }
 
 func (s *DomainService) Delete(ctx context.Context, id uuid.UUID) error {

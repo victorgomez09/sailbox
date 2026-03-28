@@ -3,6 +3,7 @@ package v1
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/sailboxhq/sailbox/apps/api/internal/api/middleware"
 	"github.com/sailboxhq/sailbox/apps/api/internal/apierr"
 	"github.com/sailboxhq/sailbox/apps/api/internal/httputil"
 	"github.com/sailboxhq/sailbox/apps/api/internal/service"
@@ -26,12 +27,13 @@ func (h *NodeHandler) List(c *gin.Context) {
 }
 
 func (h *NodeHandler) Create(c *gin.Context) {
+	orgID := middleware.GetOrgID(c)
 	var input service.CreateNodeInput
 	if err := c.ShouldBindJSON(&input); err != nil {
 		httputil.RespondError(c, apierr.ErrValidation.WithDetail(err.Error()))
 		return
 	}
-	node, err := h.svc.Create(c.Request.Context(), input)
+	node, err := h.svc.Create(c.Request.Context(), orgID, input)
 	if err != nil {
 		httputil.RespondError(c, err)
 		return

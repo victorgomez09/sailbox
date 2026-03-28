@@ -251,13 +251,15 @@ func (o *Orchestrator) GetAllPods(ctx context.Context) ([]orchestrator.PodInfo, 
 		}
 
 		cpuUsed, memUsed := "", ""
-		if m, ok := allPodMetrics[pod.Name]; ok {
+		metricKey := pod.Namespace + "/" + pod.Name
+		if m, ok := allPodMetrics[metricKey]; ok {
 			cpuUsed = m.cpuUsed
 			memUsed = m.memUsed
 		}
 
 		result = append(result, orchestrator.PodInfo{
 			Name:         pod.Name,
+			Namespace:    pod.Namespace,
 			Phase:        string(pod.Status.Phase),
 			Node:         pod.Spec.NodeName,
 			IP:           pod.Status.PodIP,
@@ -291,7 +293,8 @@ func (o *Orchestrator) fetchAllPodMetrics(ctx context.Context) map[string]podMet
 	var resp struct {
 		Items []struct {
 			Metadata struct {
-				Name string `json:"name"`
+				Name      string `json:"name"`
+				Namespace string `json:"namespace"`
 			} `json:"metadata"`
 			Containers []struct {
 				Usage struct {
@@ -311,7 +314,7 @@ func (o *Orchestrator) fetchAllPodMetrics(ctx context.Context) map[string]podMet
 			cpu = c.Usage.CPU
 			mem = c.Usage.Memory
 		}
-		result[item.Metadata.Name] = podMetric{cpuUsed: cpu, memUsed: mem}
+		result[item.Metadata.Namespace+"/"+item.Metadata.Name] = podMetric{cpuUsed: cpu, memUsed: mem}
 	}
 	return result
 }

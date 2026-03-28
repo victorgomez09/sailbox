@@ -8,6 +8,7 @@ import {
   GitBranch,
   GitFork,
   KeyRound,
+  Loader2,
   Package,
   Play,
   Server,
@@ -461,10 +462,14 @@ function GitProviderTab() {
                   variant="ghost"
                   size="icon"
                   title="Test"
-                  disabled={testMutation.isPending}
+                  disabled={testMutation.isPending && testMutation.variables === r.id}
                   onClick={() => testMutation.mutate(r.id)}
                 >
-                  <Play className="h-4 w-4" />
+                  {testMutation.isPending && testMutation.variables === r.id ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Play className="h-4 w-4" />
+                  )}
                 </Button>
                 <Button variant="ghost" size="icon" title="Edit" onClick={() => openEdit(r)}>
                   <Edit className="h-4 w-4" />
@@ -945,7 +950,7 @@ function ResourceTab({
             onTest={() => testMutation.mutate(r.id)}
             onEdit={() => openEdit(r)}
             onDelete={() => setDeleteTarget(r)}
-            testing={testMutation.isPending}
+            testing={testMutation.isPending && testMutation.variables === r.id}
             installUrl={ghStatus?.install_url}
           />
         ))

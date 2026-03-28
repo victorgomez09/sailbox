@@ -47,7 +47,7 @@ export function useAppStatus(appId: string) {
     refetchInterval: (query) => {
       const phase = query.state.data?.phase;
       if (!phase) return 3_000;
-      const stable = ["running", "stopped", "error", "not deployed"];
+      const stable = ["running", "stopped", "error", "failed", "partial", "not deployed"];
       return stable.includes(phase) ? 30_000 : 3_000;
     },
   });
@@ -103,6 +103,12 @@ export function useAppDomains(appId: string) {
   return useQuery({
     queryKey: appKeys.domains(appId),
     queryFn: () => api.get<Domain[]>(`/api/v1/apps/${appId}/domains`),
+    refetchInterval: (query) => {
+      const domains = query.state.data;
+      if (!domains) return 5_000;
+      // Poll faster while any domain has pending ingress
+      return domains.some((d) => !d.ingress_ready) ? 10_000 : 60_000;
+    },
   });
 }
 

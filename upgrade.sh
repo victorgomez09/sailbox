@@ -1,7 +1,6 @@
 #!/bin/sh
 # Sailbox upgrade script
-# Usage: curl -sSL https://get.sailbox.dev/upgrade | sh
-#   or:  sh /opt/sailbox/upgrade.sh
+# Usage: curl -sSL https://get.sailbox.dev/upgrade | sudo sh
 set -e
 
 INSTALL_DIR="/opt/sailbox"
@@ -22,22 +21,14 @@ warn()  { printf "${YELLOW}[warn]${NC}  %s\n" "$1"; }
 fail()  { printf "${RED}[error]${NC} %s\n" "$1"; exit 1; }
 
 # ── Preflight ───────────────────────────────────────────────────
-if [ "$(id -u)" -ne 0 ]; then
-    fail "Please run as root"
-fi
-
-if [ ! -f "$COMPOSE_FILE" ]; then
-    fail "Sailbox not found at $INSTALL_DIR. Run the installer first."
-fi
-
-if [ ! -f "$ENV_FILE" ]; then
-    fail "Configuration not found: $ENV_FILE"
-fi
+[ "$(id -u)" -ne 0 ] && fail "Please run as root"
+[ ! -f "$COMPOSE_FILE" ] && fail "Sailbox not found. Run the installer first."
+[ ! -f "$ENV_FILE" ] && fail "Configuration not found: $ENV_FILE"
 
 . "$ENV_FILE"
 
-CURRENT=$(docker inspect sailbox --format '{{.Config.Image}}' 2>/dev/null || echo "unknown")
-info "Current image: $CURRENT"
+CURRENT_IMAGE=$(docker inspect sailbox --format '{{.Config.Image}}' 2>/dev/null || echo "unknown")
+info "Current: $CURRENT_IMAGE"
 
 # ── Step 1: Backup database ─────────────────────────────────────
 info "Backing up database..."
@@ -45,76 +36,157 @@ mkdir -p "$BACKUP_DIR"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE="$BACKUP_DIR/sailbox_pre_upgrade_$TIMESTAMP.sql.gz"
 
-docker exec sailbox-postgres pg_dump -U sailbox sailbox | gzip > "$BACKUP_FILE" 2>/dev/null
-if [ -s "$BACKUP_FILE" ]; then
+if docker exec sailbox-postgres pg_dump -U sailbox sailbox 2>/dev/null | gzip > "$BACKUP_FILE" && [ -s "$BACKUP_FILE" ]; then
     SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
     ok "Database backup: $BACKUP_FILE ($SIZE)"
 else
     rm -f "$BACKUP_FILE"
-    warn "Backup is empty — database may be empty (fresh install)"
+    BACKUP_FILE=""
+    # Check if database has any user data (non-empty install)
+    TABLE_COUNT=$(docker exec sailbox-postgres psql -U sailbox -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'" sailbox 2>/dev/null || echo "0")
+    if [ "$TABLE_COUNT" -gt 0 ]; then
+        fail "Database backup failed but database has existing tables. Aborting upgrade to prevent data loss."
+    fi
+    warn "Backup empty or failed — continuing (fresh install has no data)"
 fi
 
-# ── Step 2: Pull new image ──────────────────────────────────────
-TARGET="${SAILBOX_VERSION:-latest}"
-info "Pulling ghcr.io/sailboxhq/sailbox:$TARGET..."
+# ── Step 2: Pull latest image ───────────────────────────────────
+TARGET_IMAGE="ghcr.io/sailboxhq/sailbox:latest"
+info "Pulling $TARGET_IMAGE..."
 
-if ! docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" pull sailbox 2>&1; then
-    fail "Failed to pull new image. Aborting — no changes made."
+if ! docker pull "$TARGET_IMAGE" 2>&1; then
+    fail "Failed to pull image. No changes made."
 fi
-ok "Image pulled"
 
-NEW_IMAGE=$(docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" config --images 2>/dev/null | grep sailbox | head -1)
-info "New image: $NEW_IMAGE"
+# Check if already up to date
+NEW_DIGEST=$(docker inspect "$TARGET_IMAGE" --format '{{.Id}}' 2>/dev/null)
+CURRENT_DIGEST=$(docker inspect sailbox --format '{{.Image}}' 2>/dev/null)
 
-# ── Step 3: Rolling restart ─────────────────────────────────────
+if [ "$NEW_DIGEST" = "$CURRENT_DIGEST" ]; then
+    ok "Already on the latest version"
+    rm -f "$BACKUP_FILE"
+    exit 0
+fi
+
+ok "New image ready"
+
+# ── Step 3: Update .env ────────────────────────────────────────
+# Ensure SAILBOX_VERSION=latest
+if sed -i.bak 's/^SAILBOX_VERSION=.*/SAILBOX_VERSION=latest/' "$ENV_FILE" 2>/dev/null && grep -q '^SAILBOX_VERSION=latest' "$ENV_FILE"; then
+    ok "Configuration updated to track latest"
+else
+    warn "Could not update SAILBOX_VERSION in $ENV_FILE — adding it"
+    echo "SAILBOX_VERSION=latest" >> "$ENV_FILE"
+    ok "SAILBOX_VERSION=latest appended to $ENV_FILE"
+fi
+
+# Ensure SETUP_SECRET exists (required since v1.x — older installs won't have it)
+if ! grep -q '^SETUP_SECRET=' "$ENV_FILE"; then
+    SETUP_SECRET=$(head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)
+    echo "SETUP_SECRET=$SETUP_SECRET" >> "$ENV_FILE"
+    ok "Generated SETUP_SECRET for this instance"
+fi
+
+# Ensure docker-compose.yml passes SETUP_SECRET to the container
+if ! grep -q 'SETUP_SECRET' "$COMPOSE_FILE"; then
+    sed -i 's/^\(\s*JWT_SECRET:.*\)$/\1\n      SETUP_SECRET: \${SETUP_SECRET}/' "$COMPOSE_FILE"
+    if grep -q 'SETUP_SECRET' "$COMPOSE_FILE"; then
+        ok "Added SETUP_SECRET to docker-compose.yml"
+    else
+        warn "Could not patch docker-compose.yml — add 'SETUP_SECRET: \${SETUP_SECRET}' to sailbox environment manually"
+    fi
+fi
+
+# ── Step 4: Restart via compose (PG stays running) ──────────────
 info "Restarting Sailbox..."
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps sailbox
+docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps --pull never sailbox
 
-# ── Step 4: Wait for healthy ────────────────────────────────────
+# ── Step 5: Health check ────────────────────────────────────────
 info "Waiting for health check..."
-SAILBOX_PORT="${SAILBOX_PORT:-3000}"
-
+HEALTHY=false
 for i in $(seq 1 60); do
-    if curl -sf "http://localhost:${SAILBOX_PORT}/healthz" >/dev/null 2>&1; then
-        ok "Sailbox is healthy"
+    if curl -sf http://localhost:3000/healthz >/dev/null 2>&1; then
+        HEALTHY=true
         break
     fi
     sleep 2
 done
 
-if ! curl -sf "http://localhost:${SAILBOX_PORT}/healthz" >/dev/null 2>&1; then
-    warn "Health check failed — rolling back..."
+if $HEALTHY; then
+    ok "Sailbox is healthy"
 
-    # Rollback: restore previous image
-    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" down sailbox 2>/dev/null
-    if [ -n "$CURRENT" ] && [ "$CURRENT" != "unknown" ]; then
-        # Force use old image
-        sed -i.bak "s|image:.*sailbox.*|image: $CURRENT|" "$COMPOSE_FILE"
-        docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d sailbox
-        mv "$COMPOSE_FILE.bak" "$COMPOSE_FILE"  # restore compose file
-        info "Rolled back to $CURRENT"
-    fi
+    # Cleanup old backups (keep last 5)
+    ls -t "$BACKUP_DIR"/sailbox_pre_upgrade_*.sql.gz 2>/dev/null | tail -n +6 | xargs rm -f 2>/dev/null || true
 
-    # Restore database if needed
-    if [ -s "$BACKUP_FILE" ]; then
-        info "Restoring database from backup..."
-        gunzip -c "$BACKUP_FILE" | docker exec -i sailbox-postgres psql -U sailbox sailbox >/dev/null 2>&1
-        ok "Database restored"
-    fi
-
-    fail "Upgrade failed — rolled back to previous version."
+    printf "\n"
+    printf "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+    printf "${GREEN}  Upgrade complete!${NC}\n"
+    printf "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+    printf "\n"
+    printf "  ${BOLD}Previous:${NC}  %s\n" "$CURRENT_IMAGE"
+    printf "  ${BOLD}Current:${NC}   %s\n" "$TARGET_IMAGE"
+    printf "  ${BOLD}Backup:${NC}    %s\n" "${BACKUP_FILE:-none}"
+    printf "\n"
+    exit 0
 fi
 
-# ── Step 5: Cleanup old backups (keep last 5) ───────────────────
-ls -t "$BACKUP_DIR"/sailbox_pre_upgrade_*.sql.gz 2>/dev/null | tail -n +6 | xargs rm -f 2>/dev/null
+# ── Rollback ────────────────────────────────────────────────────
+warn "Health check failed after 120s — rolling back..."
 
-# ── Done ────────────────────────────────────────────────────────
-printf "\n"
-printf "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
-printf "${GREEN}  Upgrade complete!${NC}\n"
-printf "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
-printf "\n"
-printf "  ${BOLD}Backup:${NC}  %s\n" "$BACKUP_FILE"
-printf "  ${BOLD}Image:${NC}   %s\n" "$NEW_IMAGE"
-printf "  ${BOLD}Status:${NC}  %s\n" "$(curl -sf http://localhost:${SAILBOX_PORT}/healthz)"
-printf "\n"
+# Restore .env
+if [ -f "$ENV_FILE.bak" ]; then
+    mv "$ENV_FILE.bak" "$ENV_FILE"
+    info "Configuration restored"
+fi
+
+# Restart compose with original image (now .env has old SAILBOX_VERSION)
+docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps --pull never sailbox
+
+# Wait for rollback health
+ROLLED_BACK=false
+for i in $(seq 1 30); do
+    if curl -sf http://localhost:3000/healthz >/dev/null 2>&1; then
+        ROLLED_BACK=true
+        break
+    fi
+    sleep 2
+done
+
+if $ROLLED_BACK; then
+    info "Rolled back to $CURRENT_IMAGE"
+else
+    warn "Rollback health check also failed — manual intervention required"
+    warn "Try: docker compose -f $COMPOSE_FILE --env-file $ENV_FILE logs sailbox"
+fi
+
+# Restore database if backup exists
+if [ -n "$BACKUP_FILE" ] && [ -s "$BACKUP_FILE" ]; then
+    info "Restoring database..."
+    # Drop and recreate to ensure clean state
+    docker exec sailbox-postgres psql -U sailbox -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" sailbox >/dev/null 2>&1
+    if gunzip -c "$BACKUP_FILE" | docker exec -i sailbox-postgres psql -U sailbox sailbox >/dev/null 2>&1; then
+        ok "Database restored from backup"
+        # Restart to pick up restored schema
+        docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" restart sailbox >/dev/null 2>&1
+        # Final health check after DB restore
+        RESTORE_HEALTHY=false
+        for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/healthz >/dev/null 2>&1; then
+                RESTORE_HEALTHY=true
+                break
+            fi
+            sleep 2
+        done
+        if $RESTORE_HEALTHY; then
+            ok "Service healthy after database restore"
+        else
+            warn "Service not healthy after database restore — manual check required"
+            warn "Try: docker compose -f $COMPOSE_FILE --env-file $ENV_FILE logs sailbox"
+        fi
+    else
+        warn "Database restore failed — backup at: $BACKUP_FILE"
+        warn "Manual restore: gunzip -c $BACKUP_FILE | docker exec -i sailbox-postgres psql -U sailbox sailbox"
+    fi
+fi
+
+fail "Upgrade failed — rolled back to previous version."

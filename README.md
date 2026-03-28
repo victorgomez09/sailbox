@@ -46,7 +46,7 @@ You get all the power of Kubernetes — rolling updates, autoscaling, health pro
 ## Quick start
 
 ```bash
-curl -sSL https://get.sailbox.dev | sh
+curl -sSL https://get.sailbox.dev | sudo sh
 ```
 
 Opens at `http://your-server-ip:3000`. That's it.
@@ -54,7 +54,7 @@ Opens at `http://your-server-ip:3000`. That's it.
 **Upgrade:**
 
 ```bash
-docker compose -f /opt/sailbox/docker-compose.yml pull && docker compose -f /opt/sailbox/docker-compose.yml up -d
+curl -sSL https://get.sailbox.dev/upgrade | sudo sh
 ```
 
 > **Requirements:** Linux (x86_64 / arm64), 2 CPU, 2 GB RAM minimum. Runs on any VPS, bare metal, or Raspberry Pi.

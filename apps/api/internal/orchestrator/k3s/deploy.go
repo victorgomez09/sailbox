@@ -441,6 +441,36 @@ func (o *Orchestrator) Scale(ctx context.Context, app *model.Application, replic
 	return err
 }
 
+func (o *Orchestrator) UpdateEnvVars(ctx context.Context, app *model.Application, envVars map[string]string) error {
+	ns := appNamespace(app)
+	name := appK8sName(app)
+
+	dep, err := o.client.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get deployment: %w", err)
+	}
+
+	if len(dep.Spec.Template.Spec.Containers) == 0 {
+		return fmt.Errorf("deployment has no containers")
+	}
+
+	// Rebuild env vars for the primary container
+	var newEnv []corev1.EnvVar
+	for k, v := range envVars {
+		newEnv = append(newEnv, corev1.EnvVar{Name: k, Value: v})
+	}
+	dep.Spec.Template.Spec.Containers[0].Env = newEnv
+
+	// Trigger rollout by annotating the pod template
+	if dep.Spec.Template.Annotations == nil {
+		dep.Spec.Template.Annotations = make(map[string]string)
+	}
+	dep.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"] = time.Now().Format(time.RFC3339)
+
+	_, err = o.client.AppsV1().Deployments(ns).Update(ctx, dep, metav1.UpdateOptions{})
+	return err
+}
+
 func (o *Orchestrator) Restart(ctx context.Context, app *model.Application) error {
 	ns := appNamespace(app)
 	name := appK8sName(app)

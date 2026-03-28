@@ -132,13 +132,17 @@ function GeneralTab() {
   const [httpsEmail, setHttpsEmail] = useState("");
 
   useEffect(() => {
-    if (settings?.base_domain) setBaseDomain(settings.base_domain);
-    if (settings?.panel_domain) setPanelDomain(settings.panel_domain);
-    if (settings?.https_email) setHttpsEmail(settings.https_email);
+    if (settings) {
+      setBaseDomain(settings.base_domain ?? "");
+      setPanelDomain(settings.panel_domain ?? "");
+      setHttpsEmail(settings.https_email ?? "");
+    }
   }, [settings]);
 
   if (isLoading) return <LoadingScreen />;
   if (!settings) return null;
+
+  const defaultDomain = settings.server_ip ? `${settings.server_ip}.sslip.io` : "";
 
   return (
     <div className="mt-4 space-y-6">
@@ -176,7 +180,7 @@ function GeneralTab() {
           <p className="text-sm text-muted-foreground">
             All services auto-generate subdomains under this domain:{" "}
             <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
-              myapp-xxxx.{baseDomain || "example.com"}
+              myapp-xxxx.{baseDomain || defaultDomain || "example.com"}
             </code>
           </p>
           <div className="space-y-2">
@@ -185,21 +189,27 @@ function GeneralTab() {
               <Input
                 value={baseDomain}
                 onChange={(e) => setBaseDomain(e.target.value)}
-                placeholder="192.168.1.100.sslip.io"
+                placeholder={defaultDomain}
                 className="max-w-md font-mono"
               />
               <Button
                 onClick={() =>
                   updateSetting.mutate({
                     key: "base_domain",
-                    value: baseDomain,
+                    value: baseDomain || defaultDomain,
                   })
                 }
-                disabled={updateSetting.isPending || baseDomain === settings.base_domain}
+                disabled={
+                  updateSetting.isPending || (baseDomain || defaultDomain) === settings?.base_domain
+                }
               >
                 <Save className="h-3.5 w-3.5" /> {updateSetting.isPending ? "Saving..." : "Save"}
               </Button>
             </div>
+            <p className="text-xs text-muted-foreground">
+              Leave empty to use the default:{" "}
+              <code className="rounded bg-muted px-1">{defaultDomain}</code>
+            </p>
           </div>
           <Separator />
           <div className="space-y-2 text-xs text-muted-foreground">
@@ -207,7 +217,8 @@ function GeneralTab() {
             <ul className="list-inside list-disc space-y-1">
               <li>
                 <strong>Development:</strong> Use{" "}
-                <code className="rounded bg-muted px-1">{settings.server_ip}.sslip.io</code>
+                <code className="rounded bg-muted px-1">{defaultDomain}</code> (auto-resolves to
+                server IP)
               </li>
               <li>
                 <strong>Production:</strong> Set your domain with wildcard DNS{" "}
@@ -417,7 +428,21 @@ function BackupTab() {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center gap-3">
-            <ToggleSwitch checked={enabled} onChange={setEnabled} />
+            <ToggleSwitch
+              checked={enabled}
+              onChange={(v) => {
+                setEnabled(v);
+                if (!v) {
+                  saveConfig.mutate({
+                    enabled: false,
+                    s3_id: s3Id,
+                    schedule: resolvedSchedule,
+                    path: path || "sailbox-backups",
+                    retention,
+                  });
+                }
+              }}
+            />
             <span className="text-sm font-medium">Automatic Backups</span>
           </div>
 
@@ -673,10 +698,10 @@ function SMTPTab() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => testSMTP.mutate()}
-              disabled={testSMTP.isPending || !form.enabled}
+              onClick={() => saveSMTP.mutate(form, { onSuccess: () => testSMTP.mutate() })}
+              disabled={testSMTP.isPending || saveSMTP.isPending || !form.enabled}
             >
-              {testSMTP.isPending ? "Sending..." : "Test"}
+              {testSMTP.isPending || saveSMTP.isPending ? "Testing..." : "Test"}
             </Button>
             <Button size="sm" onClick={() => saveSMTP.mutate(form)} disabled={saveSMTP.isPending}>
               <Save className="mr-1 h-3.5 w-3.5" />
@@ -783,7 +808,16 @@ function ChannelCard({
         <CardTitle className="flex items-center gap-2 text-sm font-medium">
           <Icon className="h-4 w-4" /> {def.label}
         </CardTitle>
-        <ToggleSwitch checked={enabled} onChange={setEnabled} />
+        <ToggleSwitch
+          checked={enabled}
+          onChange={(v) => {
+            setEnabled(v);
+            if (!v) {
+              // Immediately persist disabled state
+              saveChannel.mutate({ type: def.type, enabled: false, config });
+            }
+          }}
+        />
       </CardHeader>
       {enabled && (
         <CardContent className="space-y-4">
@@ -811,10 +845,15 @@ function ChannelCard({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => testChannel.mutate(def.type)}
-              disabled={testChannel.isPending}
+              onClick={() =>
+                saveChannel.mutate(
+                  { type: def.type, enabled, config },
+                  { onSuccess: () => testChannel.mutate(def.type) },
+                )
+              }
+              disabled={testChannel.isPending || saveChannel.isPending}
             >
-              {testChannel.isPending ? "Sending..." : "Test"}
+              {testChannel.isPending || saveChannel.isPending ? "Testing..." : "Test"}
             </Button>
             <Button
               size="sm"

@@ -32,6 +32,7 @@ export function useClusterNodes() {
   return useQuery({
     queryKey: clusterKeys.nodes,
     queryFn: () => api.get<NodeInfo[]>("/api/v1/cluster/nodes"),
+    refetchInterval: 30_000,
   });
 }
 
@@ -47,6 +48,7 @@ export function useClusterPods() {
   return useQuery({
     queryKey: clusterKeys.pods,
     queryFn: () => api.get<PodInfo[]>("/api/v1/cluster/pods"),
+    refetchInterval: 30_000,
   });
 }
 
@@ -54,6 +56,7 @@ export function useClusterEvents() {
   return useQuery({
     queryKey: clusterKeys.events,
     queryFn: () => api.get<ClusterEvent[]>("/api/v1/cluster/events?limit=100"),
+    refetchInterval: 30_000,
   });
 }
 
@@ -61,6 +64,7 @@ export function useClusterPVCs() {
   return useQuery({
     queryKey: clusterKeys.pvcs,
     queryFn: () => api.get<PVCInfo[]>("/api/v1/cluster/pvcs"),
+    refetchInterval: 60_000,
   });
 }
 
@@ -68,6 +72,7 @@ export function useClusterNamespaces() {
   return useQuery({
     queryKey: clusterKeys.namespaces,
     queryFn: () => api.get<NamespaceInfo[]>("/api/v1/cluster/namespaces"),
+    refetchInterval: 60_000,
   });
 }
 
@@ -75,6 +80,7 @@ export function useNodeMetrics() {
   return useQuery({
     queryKey: clusterKeys.nodeMetrics,
     queryFn: () => api.get<NodeMetrics[]>("/api/v1/cluster/node-metrics"),
+    refetchInterval: 30_000,
   });
 }
 
@@ -102,6 +108,7 @@ export function useClusterTopology() {
   return useQuery({
     queryKey: clusterKeys.topology,
     queryFn: () => api.get<ClusterTopology>("/api/v1/cluster/topology"),
+    refetchInterval: 60_000,
   });
 }
 
@@ -128,6 +135,7 @@ export function useHelmReleases() {
   return useQuery({
     queryKey: ["cluster", "helm-releases"],
     queryFn: () => api.get<HelmRelease[]>("/api/v1/cluster/helm-releases"),
+    refetchInterval: 60_000,
   });
 }
 
@@ -135,6 +143,7 @@ export function useDaemonSets() {
   return useQuery({
     queryKey: ["cluster", "daemonsets"],
     queryFn: () => api.get<DaemonSetInfo[]>("/api/v1/cluster/daemonsets"),
+    refetchInterval: 60_000,
   });
 }
 

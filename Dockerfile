@@ -24,11 +24,13 @@ FROM --platform=$BUILDPLATFORM oven/bun:1-alpine AS web-builder
 
 WORKDIR /src
 
-COPY package.json bunfig.toml ./
+COPY package.json bun.lock bunfig.toml ./
 COPY apps/web/package.json apps/web/package.json
 RUN bun install --frozen-lockfile
 
 COPY apps/web/ apps/web/
+ARG VERSION=dev
+ENV VERSION=${VERSION}
 RUN cd apps/web && bun run build
 
 # ============================================================================

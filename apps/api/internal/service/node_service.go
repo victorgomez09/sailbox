@@ -2,10 +2,16 @@ package service
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -22,17 +28,21 @@ type NodeService struct {
 	store  store.Store
 	orch   orchestrator.Orchestrator
 	logger *slog.Logger
+	encKey []byte // 32-byte AES key derived from setup secret
 
 	// Active log streams for WebSocket broadcasting
 	mu      sync.RWMutex
 	streams map[uuid.UUID][]chan string
 }
 
-func NewNodeService(s store.Store, orch orchestrator.Orchestrator, logger *slog.Logger) *NodeService {
+func NewNodeService(s store.Store, orch orchestrator.Orchestrator, logger *slog.Logger, setupSecret string) *NodeService {
+	// Derive a fixed 32-byte AES-256 key from the setup secret
+	hash := sha256.Sum256([]byte(setupSecret))
 	return &NodeService{
 		store:   s,
 		orch:    orch,
 		logger:  logger,
+		encKey:  hash[:],
 		streams: make(map[uuid.UUID][]chan string),
 	}
 }
@@ -90,7 +100,28 @@ type CreateNodeInput struct {
 	Role     string     `json:"role"` // worker | server
 }
 
-func (s *NodeService) Create(ctx context.Context, input CreateNodeInput) (*model.ServerNode, error) {
+func (s *NodeService) Create(ctx context.Context, orgID uuid.UUID, input CreateNodeInput) (*model.ServerNode, error) {
+	// Validate SSH key belongs to same org
+	if input.SSHKeyID != nil {
+		res, err := s.store.SharedResources().GetByID(ctx, *input.SSHKeyID)
+		if err != nil {
+			return nil, fmt.Errorf("SSH key not found: %w", err)
+		}
+		if res.OrgID != orgID {
+			return nil, fmt.Errorf("SSH key does not belong to this organization")
+		}
+	}
+
+	// Encrypt password before storing
+	encPassword := ""
+	if input.Password != "" {
+		var encErr error
+		encPassword, encErr = s.encryptPassword(input.Password)
+		if encErr != nil {
+			return nil, fmt.Errorf("failed to encrypt password: %w", encErr)
+		}
+	}
+
 	node := &model.ServerNode{
 		Name:     input.Name,
 		Host:     input.Host,
@@ -98,7 +129,7 @@ func (s *NodeService) Create(ctx context.Context, input CreateNodeInput) (*model
 		SSHUser:  input.SSHUser,
 		AuthType: input.AuthType,
 		SSHKeyID: input.SSHKeyID,
-		Password: input.Password,
+		Password: encPassword,
 		Role:     input.Role,
 		Status:   model.NodeStatusPending,
 	}
@@ -146,15 +177,47 @@ func (s *NodeService) runInitialize(node *model.ServerNode) {
 
 	s.broadcast(nodeID, fmt.Sprintf("Connecting to %s@%s:%d...", node.SSHUser, node.Host, node.Port))
 
-	// Build SSH config
+	// Build SSH config with TOFU (Trust On First Use) host key verification
+	var recordedFingerprint string
 	config := &ssh.ClientConfig{
-		User:            node.SSHUser,
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(), // TODO: add known_hosts verification
-		Timeout:         30 * time.Second,
+		User: node.SSHUser,
+		HostKeyCallback: func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+			fp := fingerprintSHA256(key)
+			if node.HostKeyFingerprint == "" {
+				// First connection: record fingerprint (TOFU)
+				recordedFingerprint = fp
+				s.broadcast(nodeID, fmt.Sprintf("Host key fingerprint (TOFU): %s", fp))
+				return nil
+			}
+			// Subsequent connections: verify fingerprint matches
+			if fp != node.HostKeyFingerprint {
+				return fmt.Errorf("host key mismatch: expected %s, got %s — possible MITM attack", node.HostKeyFingerprint, fp)
+			}
+			return nil
+		},
+		Timeout: 30 * time.Second,
 	}
 
 	if node.AuthType == "password" {
-		config.Auth = []ssh.AuthMethod{ssh.Password(node.Password)}
+		var plainPassword string
+		if strings.HasPrefix(node.Password, encPrefix) {
+			// Encrypted password — decrypt with current key
+			var decErr error
+			plainPassword, decErr = s.decryptPassword(node.Password)
+			if decErr != nil {
+				s.finishWithError(ctx, nodeID, "Failed to decrypt password (SETUP_SECRET may have changed). Delete this node and re-add it.")
+				return
+			}
+		} else if node.Password != "" {
+			// Legacy plaintext password — migrate to encrypted storage
+			s.broadcast(nodeID, "Migrating legacy password to encrypted storage...")
+			plainPassword = node.Password
+			if enc, encErr := s.encryptPassword(plainPassword); encErr == nil {
+				node.Password = enc
+				_ = s.store.ServerNodes().Update(ctx, node)
+			}
+		}
+		config.Auth = []ssh.AuthMethod{ssh.Password(plainPassword)}
 	} else if node.AuthType == "ssh_key" {
 		// Load SSH key from shared_resources
 		if node.SSHKeyID != nil {
@@ -197,6 +260,12 @@ func (s *NodeService) runInitialize(node *model.ServerNode) {
 
 	s.broadcast(nodeID, "Connected successfully.")
 
+	// Persist TOFU fingerprint on first connection
+	if recordedFingerprint != "" {
+		node.HostKeyFingerprint = recordedFingerprint
+		_ = s.store.ServerNodes().Update(ctx, node)
+	}
+
 	// Get K3s server URL and token
 	serverIP, _ := s.getK3sServerInfo()
 	k3sURL := fmt.Sprintf("https://%s:6443", serverIP)
@@ -208,6 +277,14 @@ func (s *NodeService) runInitialize(node *model.ServerNode) {
 	}
 
 	s.broadcast(nodeID, fmt.Sprintf("K3s server: %s", k3sURL))
+
+	// Snapshot existing K8s nodes BEFORE installing, so we can detect the new one after
+	existingNodes := make(map[string]bool)
+	if currentNodes, err := s.orch.GetNodes(ctx); err == nil {
+		for _, n := range currentNodes {
+			existingNodes[n.Name] = true
+		}
+	}
 
 	// Build the install script
 	role := "agent"
@@ -274,18 +351,17 @@ func (s *NodeService) runInitialize(node *model.ServerNode) {
 
 	s.broadcast(nodeID, "K3s installed. Waiting for node to join cluster...")
 
-	// Wait for node to appear in kubectl get nodes (up to 60s)
-	for i := 0; i < 12; i++ {
+	// Wait for a new node to appear that wasn't in the pre-install snapshot (up to 120s)
+	for i := 0; i < 24; i++ {
 		time.Sleep(5 * time.Second)
-		nodes, err := s.orch.GetNodes(ctx)
+		liveNodes, err := s.orch.GetNodes(ctx)
 		if err != nil {
 			continue
 		}
-		for _, n := range nodes {
-			if n.IP == node.Host || n.Name == node.Name {
+		for _, n := range liveNodes {
+			if !existingNodes[n.Name] || n.IP == node.Host {
 				s.broadcast(nodeID, fmt.Sprintf("Node %s joined the cluster! Status: %s", n.Name, n.Status))
 				_ = s.store.ServerNodes().UpdateStatus(ctx, nodeID, model.NodeStatusReady, "")
-				// Update K8s node name
 				node.K8sNodeName = n.Name
 				node.Status = model.NodeStatusReady
 				_ = s.store.ServerNodes().Update(ctx, node)
@@ -295,7 +371,7 @@ func (s *NodeService) runInitialize(node *model.ServerNode) {
 		s.broadcast(nodeID, fmt.Sprintf("Waiting... (%ds)", (i+1)*5))
 	}
 
-	s.finishWithError(ctx, nodeID, "Timeout: node did not join cluster within 60 seconds")
+	s.finishWithError(ctx, nodeID, "Timeout: node did not join cluster within 120 seconds")
 }
 
 func (s *NodeService) finishWithError(ctx context.Context, nodeID uuid.UUID, msg string) {
@@ -327,4 +403,58 @@ func (s *NodeService) getK3sToken(ctx context.Context) string {
 		return ""
 	}
 	return token
+}
+
+// fingerprintSHA256 returns the SHA256 fingerprint of an SSH public key.
+func fingerprintSHA256(key ssh.PublicKey) string {
+	hash := sha256.Sum256(key.Marshal())
+	return "SHA256:" + base64.StdEncoding.EncodeToString(hash[:])
+}
+
+const encPrefix = "enc:" // prefix to distinguish encrypted from legacy plaintext
+
+// encryptPassword encrypts plaintext using AES-256-GCM.
+func (s *NodeService) encryptPassword(plaintext string) (string, error) {
+	block, err := aes.NewCipher(s.encKey)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
+	return encPrefix + base64.StdEncoding.EncodeToString(ciphertext), nil
+}
+
+// decryptPassword decrypts an "enc:"-prefixed base64-encoded AES-256-GCM ciphertext.
+func (s *NodeService) decryptPassword(encoded string) (string, error) {
+	if !strings.HasPrefix(encoded, encPrefix) {
+		return "", fmt.Errorf("not encrypted")
+	}
+	data, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(encoded, encPrefix))
+	if err != nil {
+		return "", err
+	}
+	block, err := aes.NewCipher(s.encKey)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonceSize := gcm.NonceSize()
+	if len(data) < nonceSize {
+		return "", fmt.Errorf("ciphertext too short")
+	}
+	plaintext, err := gcm.Open(nil, data[:nonceSize], data[nonceSize:], nil)
+	if err != nil {
+		return "", err
+	}
+	return string(plaintext), nil
 }

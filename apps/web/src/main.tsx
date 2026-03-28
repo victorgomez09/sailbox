@@ -3,11 +3,12 @@ import { createRouter, RouterProvider } from "@tanstack/react-router";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { initAuth } from "./lib/auth";
+import { initSentry } from "./lib/sentry";
 import { initTheme } from "./lib/theme";
 import { routeTree } from "./routeTree.gen";
 import "./index.css";
 
-// Restore state before rendering
+initSentry();
 initAuth();
 initTheme();
 
