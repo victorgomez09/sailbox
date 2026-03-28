@@ -564,6 +564,15 @@ func (n *NoopOrchestrator) UpdateTraefikConfig(ctx context.Context, yaml string)
 	return nil
 }
 
+func (n *NoopOrchestrator) RestartTraefik(ctx context.Context) error {
+	n.logger.Info("[noop] restart traefik")
+	return nil
+}
+
+func (n *NoopOrchestrator) GetTraefikStatus(ctx context.Context) (*TraefikStatus, error) {
+	return &TraefikStatus{Ready: true, PodName: "traefik-noop", Age: "0s"}, nil
+}
+
 // ── HelmInspector ───────────────────────────────────────────────
 
 func (n *NoopOrchestrator) GetHelmReleases(ctx context.Context) ([]HelmRelease, error) {

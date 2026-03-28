@@ -1515,7 +1515,13 @@ function CleanupRow({ label, description, count, names = [], variant, mutation }
       )}
 
       {/* Confirm dialog */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <Dialog
+        open={dialogOpen}
+        onOpenChange={(v) => {
+          setDialogOpen(v);
+          if (!v) setConfirmText("");
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Clean up {label.toLowerCase()}</DialogTitle>

@@ -1,4 +1,4 @@
-import { Check, Globe, Lock, Pencil, ShieldCheck, X } from "lucide-react";
+import { AlertTriangle, Check, Clock, Globe, Lock, Pencil, ShieldCheck, X } from "lucide-react";
 import { useState } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -22,19 +22,75 @@ function daysUntil(dateStr: string): number {
   return Math.floor(diff / (1000 * 60 * 60 * 24));
 }
 
-function CertExpiry({ certExpiry }: { certExpiry?: string }) {
-  if (!certExpiry) return null;
-  const days = daysUntil(certExpiry);
-  let color = "text-muted-foreground";
-  if (days < 7) color = "text-red-500";
-  else if (days < 30) color = "text-amber-500";
+function DomainStatusBadges({ domain }: { domain: Domain }) {
+  // Protocol badge
+  const proto = domain.tls ? (
+    <Badge variant="success" className="text-xs">
+      <Lock className="mr-1 h-2.5 w-2.5" />
+      HTTPS
+    </Badge>
+  ) : (
+    <Badge variant="warning" className="text-xs">
+      HTTP
+    </Badge>
+  );
+
+  // Ingress status
+  const ingress = domain.ingress_ready ? (
+    <Badge variant="outline" className="text-xs text-green-500">
+      <Check className="mr-1 h-2.5 w-2.5" />
+      Active
+    </Badge>
+  ) : (
+    <Badge variant="outline" className="text-xs text-yellow-500">
+      <Clock className="mr-1 h-2.5 w-2.5" />
+      Provisioning
+    </Badge>
+  );
+
+  // Certificate status (only for TLS domains)
+  let cert = null;
+  if (domain.tls) {
+    if (domain.cert_expiry) {
+      const days = daysUntil(domain.cert_expiry);
+      if (days < 7) {
+        cert = (
+          <Badge variant="destructive" className="text-xs">
+            <AlertTriangle className="mr-1 h-2.5 w-2.5" />
+            Cert expires in {days}d
+          </Badge>
+        );
+      } else if (days < 30) {
+        cert = (
+          <Badge variant="warning" className="text-xs">
+            <ShieldCheck className="mr-1 h-2.5 w-2.5" />
+            Cert: {days}d left
+          </Badge>
+        );
+      } else {
+        cert = (
+          <Badge variant="outline" className="text-xs text-green-500">
+            <ShieldCheck className="mr-1 h-2.5 w-2.5" />
+            Cert valid ({days}d)
+          </Badge>
+        );
+      }
+    } else if (domain.ingress_ready) {
+      cert = (
+        <Badge variant="outline" className="text-xs text-yellow-500">
+          <Clock className="mr-1 h-2.5 w-2.5" />
+          Issuing cert...
+        </Badge>
+      );
+    }
+  }
 
   return (
-    <span className={`flex items-center gap-1 text-xs ${color}`}>
-      <ShieldCheck className="h-3 w-3" />
-      Cert expires {new Date(certExpiry).toLocaleDateString()}
-      {days < 30 && ` (${days}d)`}
-    </span>
+    <div className="flex items-center gap-1.5">
+      {proto}
+      {ingress}
+      {cert}
+    </div>
   );
 }
 
@@ -152,20 +208,8 @@ function DomainRow({
                   </Button>
                 </>
               )}
-              {/* Ingress ready dot */}
-              {!editing && (
-                <span
-                  className={`inline-block h-2 w-2 rounded-full ${domain.ingress_ready ? "bg-green-500" : "bg-yellow-500"}`}
-                  title={domain.ingress_ready ? "Ingress ready" : "Ingress pending"}
-                />
-              )}
             </div>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Badge variant={domain.tls ? "success" : "warning"} className="text-xs">
-                {domain.tls ? "HTTPS" : "HTTP"}
-              </Badge>
-              <CertExpiry certExpiry={domain.cert_expiry} />
-            </div>
+            <DomainStatusBadges domain={domain} />
           </div>
         </div>
 

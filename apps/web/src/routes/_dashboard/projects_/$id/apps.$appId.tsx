@@ -64,7 +64,7 @@ function AppDetailPage() {
   if (isLoading) return <LoadingScreen variant="detail" />;
   if (!app) return null;
 
-  // Prefer live K8s status when available; fall back to DB status
+  // Always prefer live K8s status; only fall back to DB for stable states
   const liveStatus = appStatus?.phase || app.status;
 
   const sourceDescription =

@@ -11,9 +11,8 @@ import (
 type SourceType string
 
 const (
-	SourceGit     SourceType = "git"
-	SourceImage   SourceType = "image"
-	SourceCompose SourceType = "compose"
+	SourceGit   SourceType = "git"
+	SourceImage SourceType = "image"
 )
 
 // Build type for source-based deployments.
@@ -34,6 +33,7 @@ const (
 	AppStatusDeploying  AppStatus = "deploying"
 	AppStatusRestarting AppStatus = "restarting"
 	AppStatusRunning    AppStatus = "running"
+	AppStatusPartial    AppStatus = "partial" // some replicas not ready
 	AppStatusStopping   AppStatus = "stopping"
 	AppStatusStopped    AppStatus = "stopped"
 	AppStatusError      AppStatus = "error"

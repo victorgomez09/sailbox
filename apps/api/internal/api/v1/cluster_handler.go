@@ -298,3 +298,20 @@ func (h *ClusterHandler) ExpandPVC(c *gin.Context) {
 	}
 	httputil.RespondOK(c, gin.H{"message": "PVC expanded"})
 }
+
+func (h *ClusterHandler) RestartTraefik(c *gin.Context) {
+	if err := h.orch.RestartTraefik(c.Request.Context()); err != nil {
+		httputil.RespondError(c, apierr.ErrBadRequest.WithDetail(err.Error()))
+		return
+	}
+	httputil.RespondOK(c, gin.H{"message": "Traefik restarting"})
+}
+
+func (h *ClusterHandler) GetTraefikStatus(c *gin.Context) {
+	status, err := h.orch.GetTraefikStatus(c.Request.Context())
+	if err != nil {
+		httputil.RespondError(c, err)
+		return
+	}
+	httputil.RespondOK(c, status)
+}

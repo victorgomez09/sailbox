@@ -1,6 +1,8 @@
 package v1
 
 import (
+	"strings"
+
 	"github.com/gin-gonic/gin"
 	"github.com/sailboxhq/sailbox/apps/api/internal/apierr"
 	"github.com/sailboxhq/sailbox/apps/api/internal/httputil"
@@ -39,6 +41,12 @@ func (h *SettingHandler) Update(c *gin.Context) {
 		return
 	}
 	if err := h.svc.Set(c.Request.Context(), input.Key, input.Value); err != nil {
+		errMsg := err.Error()
+		// "setting saved, but ..." = partial success (DB updated, side effect failed)
+		if strings.Contains(errMsg, "setting saved") {
+			httputil.RespondOK(c, gin.H{"key": input.Key, "value": input.Value, "warning": errMsg})
+			return
+		}
 		httputil.RespondError(c, err)
 		return
 	}

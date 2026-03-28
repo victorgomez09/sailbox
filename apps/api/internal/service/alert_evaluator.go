@@ -217,18 +217,34 @@ func (ae *AlertEvaluator) builtinRules() []AlertRule {
 				}
 				cutoff := time.Now().Add(-5 * time.Minute)
 
-				// Skip noisy/normal K8s operational events
+				// Skip noisy/normal K8s operational events.
+				// Only skip events that are guaranteed harmless. Anything that
+				// *could* indicate a real problem stays out of this list.
 				ignoredReasons := map[string]bool{
-					"FreeDiskSpaceFailed": true, // normal GC pressure
-					"Pulling":             true, // image pull in progress
-					"Pulled":              true, // image pulled
-					"Created":             true, // container created
-					"Started":             true, // container started
-					"Killing":             true, // pod termination
-					"Preempting":          true, // scheduler preemption
-					"FailedGetScale":      true, // transient HPA error
-					"Rebooted":            true, // node reboot
+					// Lifecycle — every deploy/scale triggers these
+					"Pulling":          true,
+					"Pulled":           true,
+					"Created":          true,
+					"Started":          true,
+					"Killing":          true,
+					"Scheduled":        true,
+					"SuccessfulCreate": true,
+
+					// Node info events (not failures)
+					"NodeReady":      true,
+					"RegisteredNode": true,
+					"Starting":       true, // kubelet/kube-proxy starting
+
+					// GC & scheduler (self-resolving)
+					"FreeDiskSpaceFailed": true,
 					"Evicted":             true, // handled by aggregation below
+					"Preempting":          true,
+
+					// DNS (benign on VPS with >3 nameservers)
+					"DNSConfigForming": true,
+
+					// Volume attach success (not failure)
+					"SuccessfulAttachVolume": true,
 				}
 
 				var firings []AlertFiring

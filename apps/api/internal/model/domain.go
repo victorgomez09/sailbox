@@ -13,7 +13,7 @@ type Domain struct {
 	AppID       uuid.UUID    `bun:"app_id,notnull,type:uuid" json:"app_id"`
 	Application *Application `bun:"rel:belongs-to,join:app_id=id" json:"-"`
 
-	Host       string `bun:"host,notnull,unique" json:"host"`
+	Host       string `bun:"host,notnull" json:"host"`
 	TLS        bool   `bun:"tls" json:"tls"`
 	AutoCert   bool   `bun:"auto_cert" json:"auto_cert"`
 	CertSecret string `bun:"cert_secret" json:"cert_secret,omitempty"`

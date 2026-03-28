@@ -1,11 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { AlertTriangle, Check, Copy, Loader2, Lock, Unlock } from "lucide-react";
+import { AlertTriangle, Check, Copy, Loader2, Lock, RefreshCw, Unlock } from "lucide-react";
 import { useState } from "react";
 import { PageHeader } from "@/components/page-header";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { useTraefikConfig, useUpdateTraefikConfig } from "@/hooks/use-cluster";
+import {
+  useRestartTraefik,
+  useTraefikConfig,
+  useTraefikStatus,
+  useUpdateTraefikConfig,
+} from "@/hooks/use-cluster";
 
 export const Route = createFileRoute("/_dashboard/traefik")({
   component: TraefikPage,
@@ -14,6 +20,8 @@ export const Route = createFileRoute("/_dashboard/traefik")({
 function TraefikPage() {
   const { data, isLoading, isError } = useTraefikConfig();
   const updateConfig = useUpdateTraefikConfig();
+  const { data: status } = useTraefikStatus();
+  const restart = useRestartTraefik();
   const [unlocked, setUnlocked] = useState(false);
   const [yaml, setYaml] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -56,6 +64,22 @@ function TraefikPage() {
         description="Ingress controller configuration."
         actions={
           <div className="flex items-center gap-2">
+            {status && (
+              <Badge variant={status.ready ? "success" : "warning"} className="text-xs">
+                {status.ready ? "Running" : "Restarting..."}
+              </Badge>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => restart.mutate()}
+              disabled={restart.isPending}
+            >
+              <RefreshCw
+                className={`mr-1.5 h-3.5 w-3.5 ${restart.isPending ? "animate-spin" : ""}`}
+              />
+              Restart
+            </Button>
             <Button variant="outline" size="sm" onClick={handleCopy} disabled={!displayYaml}>
               {copied ? (
                 <Check className="mr-1.5 h-3.5 w-3.5" />

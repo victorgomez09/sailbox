@@ -216,7 +216,7 @@ function buildGraph(topo: TopoData): { nodes: Node[]; edges: Edge[] } {
       data: {
         type: "service",
         label: s.name,
-        sublabel: `${s.cluster_ip} · ${s.ports}`,
+        sublabel: s.ports,
         status: "active",
       },
     });

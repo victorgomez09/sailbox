@@ -173,7 +173,7 @@ func init() {
 			`CREATE TABLE IF NOT EXISTS domains (
 				id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 				app_id UUID NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
-				host VARCHAR(255) NOT NULL UNIQUE,
+				host VARCHAR(255) NOT NULL,
 				tls BOOLEAN NOT NULL DEFAULT TRUE,
 				auto_cert BOOLEAN NOT NULL DEFAULT TRUE,
 				cert_secret VARCHAR(255) DEFAULT '',
@@ -184,6 +184,7 @@ func init() {
 				updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 				deleted_at TIMESTAMPTZ
 			)`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_domains_host_active ON domains(host) WHERE deleted_at IS NULL`,
 			`CREATE INDEX IF NOT EXISTS idx_domains_app_id ON domains(app_id)`,
 
 			// ────────────────────────────────────────────────────────

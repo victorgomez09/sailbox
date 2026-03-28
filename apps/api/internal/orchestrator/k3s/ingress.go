@@ -2,10 +2,12 @@ package k3s
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
 	"log/slog"
+	"net"
 	"strings"
 	"time"
 
@@ -88,11 +90,13 @@ func (o *Orchestrator) CreateIngress(ctx context.Context, domain *model.Domain, 
 	}
 
 	// Add TLS spec (skip for dev domains)
+	// Note: no SecretName — Traefik's certresolver manages certs in acme.json,
+	// not via K8s Secrets. Setting SecretName would cause Traefik to look for a
+	// non-existent secret and fall back to its default self-signed cert.
 	if domain.TLS && !isDevDomain(domain.Host) {
 		ingress.Spec.TLS = []networkingv1.IngressTLS{
 			{
-				Hosts:      []string{domain.Host},
-				SecretName: fmt.Sprintf("%s-tls", name),
+				Hosts: []string{domain.Host},
 			},
 		}
 	}
@@ -114,9 +118,9 @@ func (o *Orchestrator) CreateIngress(ctx context.Context, domain *model.Domain, 
 		return fmt.Errorf("create ingress: %w", err)
 	}
 
-	// Populate CertSecret so the caller can persist it for cert expiry checks
+	// Mark that TLS is managed by Traefik ACME (cert stored in acme.json, not K8s Secret)
 	if domain.TLS && !isDevDomain(domain.Host) {
-		domain.CertSecret = fmt.Sprintf("%s-tls", name)
+		domain.CertSecret = "traefik-acme"
 	}
 
 	o.logger.Info("ingress created", slog.String("host", domain.Host), slog.String("ns", ns))
@@ -179,6 +183,11 @@ const panelIngressName = "sailbox-panel"
 const panelNamespace = "sailbox"
 
 func (o *Orchestrator) EnsurePanelIngress(ctx context.Context, domain, httpsEmail string) error {
+	// Ensure the panel namespace exists
+	if err := o.ensureNamespace(ctx, panelNamespace); err != nil {
+		return fmt.Errorf("panel ingress: %w", err)
+	}
+
 	annotations := map[string]string{
 		"kubernetes.io/ingress.class": "traefik",
 	}
@@ -322,10 +331,17 @@ func (o *Orchestrator) GetCertExpiry(ctx context.Context, domain *model.Domain, 
 	if !domain.TLS || domain.CertSecret == "" {
 		return nil, nil
 	}
+
+	// For Traefik ACME-managed certs, check via TLS handshake (cert is in acme.json, not K8s Secret)
+	if domain.CertSecret == "traefik-acme" {
+		return getCertExpiryViaTLS(domain.Host)
+	}
+
+	// Fallback: check K8s Secret (for cert-manager or manual TLS)
 	ns := appNamespace(app)
 	secret, err := o.client.CoreV1().Secrets(ns).Get(ctx, domain.CertSecret, metav1.GetOptions{})
 	if err != nil {
-		return nil, nil // cert secret not found, not critical
+		return nil, nil
 	}
 	certPEM, ok := secret.Data["tls.crt"]
 	if !ok {
@@ -340,4 +356,34 @@ func (o *Orchestrator) GetCertExpiry(ctx context.Context, domain *model.Domain, 
 		return nil, nil
 	}
 	return &cert.NotAfter, nil
+}
+
+// getCertExpiryViaTLS reads the cert expiry via TLS handshake.
+// Tries localhost first (bypasses CDN), falls back to public hostname.
+func getCertExpiryViaTLS(host string) (*time.Time, error) {
+	for _, addr := range []string{"127.0.0.1:443", host + ":443"} {
+		conn, err := tls.DialWithDialer(
+			&net.Dialer{Timeout: 3 * time.Second},
+			"tcp", addr,
+			&tls.Config{InsecureSkipVerify: true, ServerName: host},
+		)
+		if err != nil {
+			continue
+		}
+		certs := conn.ConnectionState().PeerCertificates
+		conn.Close()
+		if len(certs) == 0 {
+			continue
+		}
+		// Skip Traefik default self-signed cert (ACME not yet issued)
+		if certs[0].Issuer.CommonName == "TRAEFIK DEFAULT CERT" {
+			return nil, nil
+		}
+		// Skip Cloudflare edge certs — they don't reflect origin cert state
+		if len(certs[0].Issuer.Organization) > 0 && strings.Contains(certs[0].Issuer.Organization[0], "Cloudflare") {
+			return nil, nil
+		}
+		return &certs[0].NotAfter, nil
+	}
+	return nil, nil
 }

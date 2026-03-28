@@ -3,12 +3,15 @@ package k3s
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	sigsyaml "sigs.k8s.io/yaml"
+
+	"github.com/sailboxhq/sailbox/apps/api/internal/orchestrator"
 )
 
 var helmChartGVR = schema.GroupVersionResource{
@@ -101,6 +104,50 @@ func (o *Orchestrator) UpdateTraefikConfig(ctx context.Context, yamlContent stri
 	}
 
 	return fmt.Errorf("traefik config not found: cannot update")
+}
+
+func (o *Orchestrator) RestartTraefik(ctx context.Context) error {
+	deploy, err := o.client.AppsV1().Deployments("kube-system").Get(ctx, "traefik", metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("traefik deployment not found: %w", err)
+	}
+	if deploy.Spec.Template.Annotations == nil {
+		deploy.Spec.Template.Annotations = make(map[string]string)
+	}
+	deploy.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"] = time.Now().Format(time.RFC3339)
+	_, err = o.client.AppsV1().Deployments("kube-system").Update(ctx, deploy, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("restart traefik: %w", err)
+	}
+	o.logger.Info("traefik restarted")
+	return nil
+}
+
+func (o *Orchestrator) GetTraefikStatus(ctx context.Context) (*orchestrator.TraefikStatus, error) {
+	pods, err := o.client.CoreV1().Pods("kube-system").List(ctx, metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/name=traefik",
+	})
+	if err != nil || len(pods.Items) == 0 {
+		return &orchestrator.TraefikStatus{Ready: false}, nil
+	}
+	pod := pods.Items[0]
+	// Check both pod phase and container readiness
+	ready := pod.Status.Phase == "Running"
+	var restarts int32
+	if len(pod.Status.ContainerStatuses) > 0 {
+		cs := pod.Status.ContainerStatuses[0]
+		restarts = cs.RestartCount
+		if !cs.Ready {
+			ready = false
+		}
+	}
+	age := time.Since(pod.CreationTimestamp.Time).Truncate(time.Second).String()
+	return &orchestrator.TraefikStatus{
+		Ready:    ready,
+		PodName:  pod.Name,
+		Restarts: restarts,
+		Age:      age,
+	}, nil
 }
 
 // marshalSpec extracts and serializes only the spec section of a K8s object.

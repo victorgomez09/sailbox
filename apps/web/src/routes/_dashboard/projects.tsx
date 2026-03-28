@@ -6,7 +6,16 @@ import { LoadingScreen } from "@/components/loading-screen";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useCreateProject, useProjects } from "@/hooks/use-projects";
 
 export const Route = createFileRoute("/_dashboard/projects")({
@@ -16,7 +25,7 @@ export const Route = createFileRoute("/_dashboard/projects")({
 function ProjectsPage() {
   const { data: projects, isLoading } = useProjects();
   const createProject = useCreateProject();
-  const [showCreate, setShowCreate] = useState(false);
+  const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
 
@@ -25,7 +34,7 @@ function ProjectsPage() {
     await createProject.mutateAsync({ name, description });
     setName("");
     setDescription("");
-    setShowCreate(false);
+    setOpen(false);
   }
 
   if (isLoading) return <LoadingScreen />;
@@ -37,35 +46,60 @@ function ProjectsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Projects</h1>
           <p className="text-sm text-muted-foreground">Manage your projects</p>
         </div>
-        <Button onClick={() => setShowCreate(!showCreate)}>
+        <Button onClick={() => setOpen(true)}>
           <Plus className="h-4 w-4" /> New Project
         </Button>
       </div>
 
-      {showCreate && (
-        <Card className="mt-4">
-          <CardContent className="pt-4">
-            <form onSubmit={handleCreate} className="flex gap-3">
-              <Input
-                placeholder="Project name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                required
-                className="max-w-xs"
-              />
-              <Input
-                placeholder="Description"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className="flex-1"
-              />
-              <Button type="submit" disabled={createProject.isPending}>
-                {createProject.isPending ? "..." : "Create"}
+      <Dialog
+        open={open}
+        onOpenChange={(v) => {
+          setOpen(v);
+          if (!v) {
+            setName("");
+            setDescription("");
+          }
+        }}
+      >
+        <DialogContent>
+          <form onSubmit={handleCreate}>
+            <DialogHeader>
+              <DialogTitle>New Project</DialogTitle>
+              <DialogDescription>
+                Projects group your applications, databases, and cron jobs.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="mt-4 space-y-4">
+              <div className="space-y-2">
+                <Label>Name</Label>
+                <Input
+                  placeholder="my-project"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  required
+                  autoFocus
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Description</Label>
+                <Input
+                  placeholder="Optional description"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                />
+              </div>
+            </div>
+            <DialogFooter className="mt-6">
+              <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+                Cancel
               </Button>
-            </form>
-          </CardContent>
-        </Card>
-      )}
+              <Button type="submit" disabled={createProject.isPending || !name.trim()}>
+                {createProject.isPending ? "Creating..." : "Create Project"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {!projects?.length ? (
         <div className="mt-8">
@@ -73,7 +107,7 @@ function ProjectsPage() {
             icon={FolderKanban}
             message="No projects yet. Create your first project to get started."
             actionLabel="New Project"
-            onAction={() => setShowCreate(true)}
+            onAction={() => setOpen(true)}
           />
         </div>
       ) : (

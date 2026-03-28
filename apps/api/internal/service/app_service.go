@@ -28,7 +28,7 @@ func NewAppService(s store.Store, orch orchestrator.Orchestrator, logger *slog.L
 type CreateAppInput struct {
 	ProjectID     uuid.UUID           `json:"project_id" binding:"required"`
 	Name          string              `json:"name" binding:"required,min=1,max=63"`
-	SourceType    model.SourceType    `json:"source_type" binding:"required,oneof=git image compose"`
+	SourceType    model.SourceType    `json:"source_type" binding:"required,oneof=git image"`
 	GitRepo       string              `json:"git_repo" binding:"required_if=SourceType git"`
 	GitBranch     string              `json:"git_branch"`
 	GitProviderID *uuid.UUID          `json:"git_provider_id"`
@@ -357,11 +357,58 @@ func (s *AppService) GetByID(ctx context.Context, id uuid.UUID) (*model.Applicat
 }
 
 func (s *AppService) List(ctx context.Context, projectID uuid.UUID, params store.ListParams) ([]model.Application, int, error) {
-	return s.store.Applications().ListByProject(ctx, projectID, params)
+	apps, total, err := s.store.Applications().ListByProject(ctx, projectID, params)
+	if err == nil {
+		s.syncLiveStatuses(ctx, apps)
+	}
+	return apps, total, err
 }
 
 func (s *AppService) ListAll(ctx context.Context, params store.ListParams, filter store.AppListFilter) ([]model.Application, int, error) {
-	return s.store.Applications().ListAll(ctx, params, filter)
+	apps, total, err := s.store.Applications().ListAll(ctx, params, filter)
+	if err == nil {
+		s.syncLiveStatuses(ctx, apps)
+	}
+	return apps, total, err
+}
+
+// syncLiveStatuses queries K8s for each app's real status and overwrites
+// the in-memory status before returning to the caller. Also persists to DB
+// if changed (triggers SSE for other clients).
+func (s *AppService) syncLiveStatuses(ctx context.Context, apps []model.Application) {
+	for i := range apps {
+		if apps[i].Status == model.AppStatusIdle || apps[i].Status == model.AppStatusBuilding {
+			continue
+		}
+		status, err := s.orch.GetStatus(ctx, &apps[i])
+		if err != nil {
+			continue
+		}
+		var live model.AppStatus
+		switch status.Phase {
+		case "running":
+			live = model.AppStatusRunning
+		case "pending":
+			live = model.AppStatusDeploying
+		case "stopped":
+			live = model.AppStatusStopped
+		case "failed":
+			live = model.AppStatusError
+		case "partial":
+			live = model.AppStatusPartial
+		}
+		if live == "" {
+			continue
+		}
+		// Always overwrite in-memory for accurate response
+		if live != apps[i].Status {
+			apps[i].Status = live
+			// Persist to DB (async — don't block response for DB write)
+			go func(id uuid.UUID, s2 model.AppStatus) {
+				_ = s.store.Applications().UpdateStatus(context.Background(), id, s2)
+			}(apps[i].ID, live)
+		}
+	}
 }
 
 func (s *AppService) Delete(ctx context.Context, id uuid.UUID) error {

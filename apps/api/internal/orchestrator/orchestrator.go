@@ -37,6 +37,15 @@ type Orchestrator interface {
 type TraefikManager interface {
 	GetTraefikConfig(ctx context.Context) (string, error)
 	UpdateTraefikConfig(ctx context.Context, yaml string) error
+	RestartTraefik(ctx context.Context) error
+	GetTraefikStatus(ctx context.Context) (*TraefikStatus, error)
+}
+
+type TraefikStatus struct {
+	Ready    bool   `json:"ready"`
+	PodName  string `json:"pod_name"`
+	Restarts int32  `json:"restarts"`
+	Age      string `json:"age"`
 }
 
 // HelmInspector provides information about Helm releases.

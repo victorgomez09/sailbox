@@ -131,6 +131,34 @@ export function useUpdateTraefikConfig() {
   });
 }
 
+export function useTraefikStatus() {
+  return useQuery({
+    queryKey: ["cluster", "traefik-status"],
+    queryFn: () =>
+      api.get<{ ready: boolean; pod_name: string; restarts: number; age: string }>(
+        "/api/v1/cluster/traefik-status",
+      ),
+    refetchInterval: (query) => {
+      const status = query.state.data;
+      // Poll fast while not ready (restarting), slow when stable
+      return status && !status.ready ? 3_000 : 15_000;
+    },
+  });
+}
+
+export function useRestartTraefik() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post("/api/v1/cluster/traefik-restart"),
+    onSuccess: () => {
+      toast.success("Traefik restarting");
+      // Immediately invalidate to show "Starting" state
+      qc.invalidateQueries({ queryKey: ["cluster", "traefik-status"] });
+    },
+    onError: (err: any) => toast.error(err?.detail || "Failed to restart Traefik"),
+  });
+}
+
 export function useHelmReleases() {
   return useQuery({
     queryKey: ["cluster", "helm-releases"],

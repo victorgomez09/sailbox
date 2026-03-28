@@ -126,7 +126,9 @@ function SettingsPage() {
 
 function GeneralTab() {
   const { data: settings, isLoading } = useSettings();
-  const updateSetting = useUpdateSetting();
+  const saveDomain = useUpdateSetting();
+  const savePanel = useUpdateSetting();
+  const saveEmail = useUpdateSetting();
   const [baseDomain, setBaseDomain] = useState("");
   const [panelDomain, setPanelDomain] = useState("");
   const [httpsEmail, setHttpsEmail] = useState("");
@@ -194,16 +196,16 @@ function GeneralTab() {
               />
               <Button
                 onClick={() =>
-                  updateSetting.mutate({
+                  saveDomain.mutate({
                     key: "base_domain",
                     value: baseDomain || defaultDomain,
                   })
                 }
                 disabled={
-                  updateSetting.isPending || (baseDomain || defaultDomain) === settings?.base_domain
+                  saveDomain.isPending || (baseDomain || defaultDomain) === settings?.base_domain
                 }
               >
-                <Save className="h-3.5 w-3.5" /> {updateSetting.isPending ? "Saving..." : "Save"}
+                <Save className="h-3.5 w-3.5" /> {saveDomain.isPending ? "Saving..." : "Save"}
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
@@ -252,14 +254,14 @@ function GeneralTab() {
               />
               <Button
                 onClick={() =>
-                  updateSetting.mutate({
+                  savePanel.mutate({
                     key: "panel_domain",
                     value: panelDomain,
                   })
                 }
-                disabled={updateSetting.isPending || panelDomain === (settings?.panel_domain ?? "")}
+                disabled={savePanel.isPending || panelDomain === (settings?.panel_domain ?? "")}
               >
-                <Save className="h-3.5 w-3.5" /> {updateSetting.isPending ? "Saving..." : "Save"}
+                <Save className="h-3.5 w-3.5" /> {savePanel.isPending ? "Saving..." : "Save"}
               </Button>
             </div>
           </div>
@@ -295,14 +297,14 @@ function GeneralTab() {
               />
               <Button
                 onClick={() =>
-                  updateSetting.mutate({
+                  saveEmail.mutate({
                     key: "https_email",
                     value: httpsEmail,
                   })
                 }
-                disabled={updateSetting.isPending || httpsEmail === (settings?.https_email ?? "")}
+                disabled={saveEmail.isPending || httpsEmail === (settings?.https_email ?? "")}
               >
-                <Save className="h-3.5 w-3.5" /> {updateSetting.isPending ? "Saving..." : "Save"}
+                <Save className="h-3.5 w-3.5" /> {saveEmail.isPending ? "Saving..." : "Save"}
               </Button>
             </div>
           </div>

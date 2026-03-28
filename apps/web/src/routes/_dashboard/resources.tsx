@@ -489,7 +489,16 @@ function GitProviderTab() {
       )}
 
       {/* GitHub OAuth Dialog */}
-      <Dialog open={showGitHubDialog} onOpenChange={setShowGitHubDialog}>
+      <Dialog
+        open={showGitHubDialog}
+        onOpenChange={(v) => {
+          setShowGitHubDialog(v);
+          if (!v) {
+            setGitHubConnectType("personal");
+            setGitHubOrg("");
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Connect GitHub</DialogTitle>

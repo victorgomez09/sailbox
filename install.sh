@@ -117,6 +117,43 @@ wait_traefik() {
     warn "Traefik not ready yet, but may start soon"
 }
 
+# ── Configure Traefik with Let's Encrypt ───────────────────────
+configure_traefik_tls() {
+    # Skip if already configured
+    if k3s kubectl get helmchartconfig traefik -n kube-system >/dev/null 2>&1; then
+        ok "Traefik TLS already configured"
+        return
+    fi
+
+    info "Configuring Traefik with Let's Encrypt..."
+    cat <<'ACMEEOF' | k3s kubectl apply -f - >/dev/null 2>&1
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+spec:
+  valuesContent: |
+    additionalArguments:
+      - "--certificatesresolvers.letsencrypt.acme.storage=/data/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+    persistence:
+      enabled: true
+      size: 128Mi
+ACMEEOF
+
+    # Wait for Traefik to pick up the new config
+    sleep 5
+    for i in $(seq 1 30); do
+        if k3s kubectl get pods -n kube-system -l app.kubernetes.io/name=traefik -o jsonpath='{.items[0].status.phase}' 2>/dev/null | grep -q Running; then
+            ok "Traefik TLS configured (Let's Encrypt)"
+            return
+        fi
+        sleep 2
+    done
+    warn "Traefik restarting — TLS may take a moment"
+}
+
 # ── Generate secrets ────────────────────────────────────────────
 generate_secrets() {
     if [ -f "$ENV_FILE" ]; then

@@ -218,6 +218,8 @@ func NewRouter(deps *RouterDeps) *gin.Engine {
 			protected.PUT("/cluster/nodes/:name/pool", cluster.SetNodePool)
 			protected.GET("/cluster/traefik-config", cluster.GetTraefikConfig)
 			protected.PUT("/cluster/traefik-config", cluster.UpdateTraefikConfig)
+			protected.POST("/cluster/traefik-restart", cluster.RestartTraefik)
+			protected.GET("/cluster/traefik-status", cluster.GetTraefikStatus)
 			protected.GET("/cluster/helm-releases", cluster.GetHelmReleases)
 			protected.GET("/cluster/daemonsets", cluster.GetDaemonSets)
 			protected.DELETE("/cluster/pvcs/:namespace/:name", cluster.DeletePVC)

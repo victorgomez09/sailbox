@@ -118,7 +118,43 @@ func (s *DatabaseService) GetByID(ctx context.Context, id uuid.UUID) (*model.Man
 }
 
 func (s *DatabaseService) List(ctx context.Context, projectID uuid.UUID, params store.ListParams) ([]model.ManagedDatabase, int, error) {
-	return s.store.ManagedDatabases().ListByProject(ctx, projectID, params)
+	dbs, total, err := s.store.ManagedDatabases().ListByProject(ctx, projectID, params)
+	if err == nil {
+		s.syncLiveStatuses(ctx, dbs)
+	}
+	return dbs, total, err
+}
+
+func (s *DatabaseService) syncLiveStatuses(ctx context.Context, dbs []model.ManagedDatabase) {
+	for i := range dbs {
+		if dbs[i].Status == model.AppStatusIdle {
+			continue
+		}
+		status, err := s.orch.GetDatabaseStatus(ctx, &dbs[i])
+		if err != nil {
+			continue
+		}
+		var live model.AppStatus
+		switch status.Phase {
+		case "running":
+			live = model.AppStatusRunning
+		case "stopped":
+			live = model.AppStatusStopped
+		case "not deployed":
+			if dbs[i].Status != model.AppStatusIdle {
+				live = model.AppStatusError
+			}
+		case "pending":
+			live = model.AppStatusDeploying
+		}
+		if live != "" && live != dbs[i].Status {
+			dbs[i].Status = live
+			go func(db model.ManagedDatabase, s2 model.AppStatus) {
+				db.Status = s2
+				_ = s.store.ManagedDatabases().Update(context.Background(), &db)
+			}(dbs[i], live)
+		}
+	}
 }
 
 func (s *DatabaseService) Delete(ctx context.Context, id uuid.UUID) error {

@@ -83,7 +83,7 @@ export interface App {
   id: string;
   name: string;
   description: string;
-  source_type: "image" | "git" | "compose";
+  source_type: "image" | "git";
   docker_image: string;
   git_repo: string;
   git_branch: string;
