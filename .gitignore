@@ -43,7 +43,6 @@ kubeconfig.yaml
 k3s.yaml
 
 # Bun
-bun.lock
 
 # TanStack Router
 .tanstack/
