@@ -207,6 +207,16 @@ func (s *VersionService) TriggerUpgrade() error {
 	s.upgradeMu.Lock()
 	defer s.upgradeMu.Unlock()
 
+	// Check if upgrader container is actually running (not just status file)
+	if out, err := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", "sailbox-upgrader").Output(); err == nil {
+		if strings.TrimSpace(string(out)) == "true" {
+			return fmt.Errorf("upgrade already in progress (upgrader container is running)")
+		}
+		// Container exists but not running — remove it
+		_ = exec.Command("docker", "rm", "-f", "sailbox-upgrader").Run()
+	}
+
+	// Also check status file as secondary guard
 	current := s.GetUpgradeStatus()
 	if current.Status == "upgrading" {
 		return fmt.Errorf("upgrade already in progress")
@@ -220,9 +230,6 @@ func (s *VersionService) TriggerUpgrade() error {
 	if _, err := os.Stat("/opt/sailbox/upgrade-lib.sh"); err != nil {
 		return fmt.Errorf("upgrade-lib.sh not found at /opt/sailbox — ensure /opt/sailbox is mounted")
 	}
-
-	// Remove stale upgrader container if exists
-	_ = exec.Command("docker", "rm", "-f", "sailbox-upgrader").Run()
 
 	// Write initial status
 	if err := writeUpgradeStatus(UpgradeStatus{Status: "upgrading", Message: "Starting upgrade..."}); err != nil {
