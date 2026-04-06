@@ -132,13 +132,40 @@ func (o *Orchestrator) Build(ctx context.Context, app *model.Application, opts o
 
 	// If build type is nixpacks, add an init container to generate Dockerfile
 	if opts.BuildType == "nixpacks" {
+		// Name:    "nixpacks-plan",
+		// Image:   "ghcr.io/railwayapp/nixpacks:latest",
+		// Command: []string{"sh", "-c"},
+		// Args:    []string{"nixpacks build /workspace --out /workspace && cp /workspace/.nixpacks/Dockerfile /workspace/Dockerfile || nixpacks plan /workspace > /workspace/.nixpacks-plan.json"},
+		initContainers = append(initContainers, corev1.Container{
+			Name:    "nixpacks-install",
+			Image:   "alpine:latest",
+			Command: []string{"sh", "-c"},
+			// Intentamos copiar desde /usr/bin o desde la raíz
+			Args: []string{
+				`
+            apk add --no-cache curl tar bash && \
+        curl -sSL https://nixpacks.com/install.sh | bash && \
+        cp /usr/local/bin/nixpacks /bin-shared/nixpacks && \
+        chmod +x /bin-shared/nixpacks
+            `,
+			},
+			VolumeMounts: []corev1.VolumeMount{
+				{Name: "binaries", MountPath: "/bin-shared"},
+			},
+		})
+
 		initContainers = append(initContainers, corev1.Container{
 			Name:    "nixpacks-plan",
-			Image:   "ghcr.io/railwayapp/nixpacks:latest",
-			Command: []string{"sh", "-c"},
-			Args:    []string{"nixpacks build /workspace --out /workspace && cp /workspace/.nixpacks/Dockerfile /workspace/Dockerfile || nixpacks plan /workspace > /workspace/.nixpacks-plan.json"},
+			Image:   "debian:bookworm-slim",
+			Command: []string{"/bin/sh", "-c"},
+			Args: []string{
+				"/bin-shared/nixpacks plan /workspace > /workspace/.nixpacks-plan.json && " +
+					"/bin-shared/nixpacks build /workspace --out /workspace && " +
+					"cp /workspace/.nixpacks/Dockerfile /workspace/Dockerfile",
+			},
 			VolumeMounts: []corev1.VolumeMount{
 				{Name: "workspace", MountPath: "/workspace"},
+				{Name: "binaries", MountPath: "/bin-shared"},
 			},
 		})
 		// Override dockerfile to the generated one
@@ -209,6 +236,10 @@ func (o *Orchestrator) Build(ctx context.Context, app *model.Application, opts o
 							VolumeSource: corev1.VolumeSource{
 								EmptyDir: &corev1.EmptyDirVolumeSource{},
 							},
+						},
+						{
+							Name:         "binaries", // Nuevo volumen para el ejecutable
+							VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 						},
 					},
 				},

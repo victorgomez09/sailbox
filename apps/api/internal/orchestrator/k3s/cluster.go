@@ -10,6 +10,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/sailboxhq/sailbox/apps/api/internal/orchestrator"
 )
@@ -632,24 +633,45 @@ func (o *Orchestrator) GetClusterTopology(ctx context.Context) (*orchestrator.Cl
 	}
 
 	// Ingresses (sailbox-managed)
-	ingList, err := o.client.NetworkingV1().Ingresses("").List(ctx, metav1.ListOptions{
+	routeList, err := o.dynamicClient.Resource(httpRouteGVR).List(ctx, metav1.ListOptions{
 		LabelSelector: "app.kubernetes.io/managed-by=sailbox",
 	})
+
 	if err == nil {
-		for _, ing := range ingList.Items {
-			for _, rule := range ing.Spec.Rules {
-				svcName := ""
-				if rule.HTTP != nil && len(rule.HTTP.Paths) > 0 {
-					svcName = rule.HTTP.Paths[0].Backend.Service.Name
-				}
-				topo.Ingresses = append(topo.Ingresses, orchestrator.TopologyIngress{
-					Name:      ing.Name,
-					Namespace: ing.Namespace,
-					Host:      rule.Host,
-					Service:   svcName,
-					AppID:     ing.Labels["sailbox/app-id"],
-				})
+		for _, item := range routeList.Items {
+			// A. Extraer Hosts (Slice de strings)
+			hosts, _, _ := unstructured.NestedStringSlice(item.Object, "spec", "hostnames")
+			if hosts == nil {
+				hosts = []string{} // Evitar nulos en el JSON
 			}
+
+			// B. Extraer el nombre del Gateway (desde parentRefs)
+			gatewayName := "unknown"
+			parentRefs, found, _ := unstructured.NestedSlice(item.Object, "spec", "parentRefs")
+			if found && len(parentRefs) > 0 {
+				if firstParent, ok := parentRefs[0].(map[string]interface{}); ok {
+					gatewayName = firstParent["name"].(string)
+				}
+			}
+
+			// C. Extraer el Status (Accepted / Programmed)
+			// Buscamos en status.parents[0].conditions
+			statusStr := "Pending"
+			if parents, found, _ := unstructured.NestedSlice(item.Object, "status", "parents"); found && len(parents) > 0 {
+				// Si el controlador ya procesó la ruta, suele haber una entrada en parents
+				statusStr = "Accepted"
+
+				// Opcional: Podrías iterar sobre conditions para buscar "Programmed == True"
+			}
+
+			// 2. Mapear al struct TopologyRoute que definimos
+			topo.Routes = append(topo.Routes, orchestrator.TopologyRoute{
+				Name:      item.GetName(),
+				Namespace: item.GetNamespace(),
+				Hosts:     hosts,
+				Gateway:   gatewayName,
+				Status:    statusStr,
+			})
 		}
 	}
 

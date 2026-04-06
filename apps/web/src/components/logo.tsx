@@ -8,7 +8,7 @@ export function Logo({ className }: { className?: string }) {
       role="img"
       aria-label="Sailbox"
     >
-      <title>Sailbox</title>
+      {/* <title>Sailbox</title> */}
       <polygon points="16,13 23,17 16,21 9,17" fill="currentColor" opacity="0.12" />
       <polygon points="9,17 16,21 16,29 9,25" fill="currentColor" opacity="0.48" />
       <polygon points="23,17 16,21 16,29 23,25" fill="currentColor" opacity="0.22" />

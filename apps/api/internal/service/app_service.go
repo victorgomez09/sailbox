@@ -131,7 +131,7 @@ func (s *AppService) Create(ctx context.Context, input CreateAppInput) (*model.A
 
 	// Auto-generate default Traefik domain
 	if s.domainSvc != nil {
-		if domain, err := s.domainSvc.GenerateTraefikDomain(ctx, app.ID); err != nil {
+		if domain, err := s.domainSvc.GenerateAutoDomain(ctx, app.ID); err != nil {
 			s.logger.Error("failed to auto-generate domain", slog.Any("error", err))
 		} else {
 			s.logger.Info("default domain generated", slog.String("host", domain.Host))
@@ -564,7 +564,7 @@ func (s *AppService) Delete(ctx context.Context, id uuid.UUID) error {
 	// Delete associated Ingress resources
 	domains, _ := s.store.Domains().ListByApp(ctx, id)
 	for _, d := range domains {
-		if err := s.orch.DeleteIngress(ctx, &d); err != nil {
+		if err := s.orch.DeleteRoute(ctx, &d); err != nil {
 			s.logger.Warn("failed to delete ingress", slog.String("domain", d.Host), slog.Any("error", err))
 		}
 	}

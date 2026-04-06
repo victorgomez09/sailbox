@@ -130,30 +130,6 @@ func (h *ClusterHandler) SetNodePool(c *gin.Context) {
 	httputil.RespondOK(c, gin.H{"message": "node pool updated"})
 }
 
-func (h *ClusterHandler) GetTraefikConfig(c *gin.Context) {
-	yaml, err := h.orch.GetTraefikConfig(c.Request.Context())
-	if err != nil {
-		httputil.RespondError(c, err)
-		return
-	}
-	httputil.RespondOK(c, gin.H{"yaml": yaml})
-}
-
-func (h *ClusterHandler) UpdateTraefikConfig(c *gin.Context) {
-	var body struct {
-		YAML string `json:"yaml" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		httputil.RespondError(c, apierr.ErrBadRequest.WithDetail(err.Error()))
-		return
-	}
-	if err := h.orch.UpdateTraefikConfig(c.Request.Context(), body.YAML); err != nil {
-		httputil.RespondError(c, err)
-		return
-	}
-	httputil.RespondOK(c, gin.H{"message": "traefik config updated"})
-}
-
 func (h *ClusterHandler) GetHelmReleases(c *gin.Context) {
 	releases, err := h.orch.GetHelmReleases(c.Request.Context())
 	if err != nil {
@@ -278,6 +254,31 @@ func (h *ClusterHandler) CleanupOrphanIngresses(c *gin.Context) {
 	httputil.RespondOK(c, result)
 }
 
+func (h *ClusterHandler) ConfigureNetwork(c *gin.Context) {
+	var body struct {
+		IPRange string `json:"ip_range" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		httputil.RespondError(c, apierr.ErrBadRequest.WithDetail(err.Error()))
+		return
+	}
+
+	if err := h.orch.ConfigureMetalLB(c.Request.Context(), body.IPRange); err != nil {
+		httputil.RespondError(c, err)
+		return
+	}
+	httputil.RespondOK(c, gin.H{"message": "Network pool configured successfully"})
+}
+
+func (h *ClusterHandler) GetNetworkSuggestion(c *gin.Context) {
+	suggestion, err := h.orch.GetSuggestedIPRange(c.Request.Context())
+	if err != nil {
+		httputil.RespondError(c, err)
+		return
+	}
+	httputil.RespondOK(c, gin.H{"suggestion": suggestion})
+}
+
 func (h *ClusterHandler) ExpandPVC(c *gin.Context) {
 	namespace := c.Param("namespace")
 	name := c.Param("name")
@@ -297,21 +298,4 @@ func (h *ClusterHandler) ExpandPVC(c *gin.Context) {
 		return
 	}
 	httputil.RespondOK(c, gin.H{"message": "PVC expanded"})
-}
-
-func (h *ClusterHandler) RestartTraefik(c *gin.Context) {
-	if err := h.orch.RestartTraefik(c.Request.Context()); err != nil {
-		httputil.RespondError(c, apierr.ErrBadRequest.WithDetail(err.Error()))
-		return
-	}
-	httputil.RespondOK(c, gin.H{"message": "Traefik restarting"})
-}
-
-func (h *ClusterHandler) GetTraefikStatus(c *gin.Context) {
-	status, err := h.orch.GetTraefikStatus(c.Request.Context())
-	if err != nil {
-		httputil.RespondError(c, err)
-		return
-	}
-	httputil.RespondOK(c, status)
 }

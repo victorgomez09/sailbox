@@ -17,7 +17,6 @@ import (
 	"github.com/sailboxhq/sailbox/apps/api/internal/auth"
 	"github.com/sailboxhq/sailbox/apps/api/internal/config"
 	"github.com/sailboxhq/sailbox/apps/api/internal/event"
-	orch_iface "github.com/sailboxhq/sailbox/apps/api/internal/orchestrator"
 	"github.com/sailboxhq/sailbox/apps/api/internal/orchestrator/k3s"
 	"github.com/sailboxhq/sailbox/apps/api/internal/server"
 	"github.com/sailboxhq/sailbox/apps/api/internal/service"
@@ -101,17 +100,11 @@ func main() {
 	// JWT
 	jwtManager := auth.NewJWTManager(cfg.Auth.JWTSecret, cfg.Auth.TokenExpiry, cfg.Auth.RefreshExpiry)
 
-	// Orchestrator — real K3s if kubeconfig available, otherwise noop fallback
-	var orch orch_iface.Orchestrator
-	if cfg.K8s.InCluster || cfg.K8s.Kubeconfig != "" {
-		orch, err = k3s.New(cfg.K8s, logger)
-		if err != nil {
-			logger.Warn("K3s connection failed, falling back to noop", slog.Any("error", err))
-			orch = orch_iface.NewNoop(logger)
-		}
-	} else {
-		logger.Info("no KUBECONFIG set, using noop orchestrator")
-		orch = orch_iface.NewNoop(logger)
+	// Orchestrator — real K3s cluster connection is required
+	orch, err := k3s.New(cfg.K8s, logger)
+	if err != nil {
+		logger.Error("failed to connect to K3s cluster", slog.Any("error", err))
+		os.Exit(1)
 	}
 
 	// Real-time events: PG LISTEN/NOTIFY → SSE broker → browser

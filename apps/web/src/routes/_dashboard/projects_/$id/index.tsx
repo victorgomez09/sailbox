@@ -175,7 +175,7 @@ function ProjectDetailPage() {
       />
       <Separator className="my-5" />
 
-      <Tabs defaultValue="services">
+      <Tabs defaultValue="services" orientation="vertical">
         <div className="flex items-center justify-between">
           <TabsList>
             <TabsTrigger value="services">Services</TabsTrigger>

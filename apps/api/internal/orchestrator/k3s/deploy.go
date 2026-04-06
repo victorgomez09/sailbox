@@ -272,7 +272,7 @@ func (o *Orchestrator) Deploy(ctx context.Context, app *model.Application, opts 
 	}
 
 	// Sync ingress backend ports if they changed
-	if err := o.SyncIngressPorts(ctx, app); err != nil {
+	if err := o.SyncRoutePorts(ctx, app); err != nil {
 		return fmt.Errorf("ingress port sync failed: %w", err)
 	}
 

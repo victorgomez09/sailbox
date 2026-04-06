@@ -227,10 +227,10 @@ func NewRouter(deps *RouterDeps) *gin.Engine {
 			protected.GET("/cluster/topology", cluster.GetTopology)
 			protected.GET("/cluster/node-pools", cluster.GetNodePools)
 			protected.PUT("/cluster/nodes/:name/pool", cluster.SetNodePool)
-			protected.GET("/cluster/traefik-config", cluster.GetTraefikConfig)
-			protected.PUT("/cluster/traefik-config", cluster.UpdateTraefikConfig)
-			protected.POST("/cluster/traefik-restart", cluster.RestartTraefik)
-			protected.GET("/cluster/traefik-status", cluster.GetTraefikStatus)
+			// protected.GET("/cluster/traefik-config", cluster.GetTraefikConfig)
+			// protected.PUT("/cluster/traefik-config", cluster.UpdateTraefikConfig)
+			// protected.POST("/cluster/traefik-restart", cluster.RestartTraefik)
+			// protected.GET("/cluster/traefik-status", cluster.GetTraefikStatus)
 			protected.GET("/cluster/helm-releases", cluster.GetHelmReleases)
 			protected.GET("/cluster/daemonsets", cluster.GetDaemonSets)
 			protected.DELETE("/cluster/pvcs/:namespace/:name", cluster.DeletePVC)
@@ -242,6 +242,8 @@ func NewRouter(deps *RouterDeps) *gin.Engine {
 			protected.POST("/cluster/cleanup/stale-replicasets", cluster.CleanupStaleReplicaSets)
 			protected.POST("/cluster/cleanup/completed-jobs", cluster.CleanupCompletedJobs)
 			protected.POST("/cluster/cleanup/orphan-ingresses", cluster.CleanupOrphanIngresses)
+			protected.GET("/cluster/network/suggestion", cluster.GetNetworkSuggestion)
+			protected.POST("/cluster/network/configure", cluster.ConfigureNetwork)
 
 			// Monitoring
 			monitoring := v1.NewMonitoringHandler(deps.Services.Metrics)

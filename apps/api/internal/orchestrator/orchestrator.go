@@ -14,7 +14,7 @@ import (
 type Orchestrator interface {
 	AppManager
 	DatabaseManager
-	IngressManager
+	RouteManager
 	StorageManager
 	ClusterInspector
 	LogStreamer
@@ -26,26 +26,22 @@ type Orchestrator interface {
 	ConfigMapManager
 	ResourceQuotaManager
 	NetworkPolicyManager
-	TraefikManager
 	HelmInspector
 	DaemonSetInspector
 	ServiceAccountManager
 	CleanupInspector
+	CertificateManager
+	MetalLBManager
 }
 
-// TraefikManager handles Traefik configuration.
-type TraefikManager interface {
-	GetTraefikConfig(ctx context.Context) (string, error)
-	UpdateTraefikConfig(ctx context.Context, yaml string) error
-	RestartTraefik(ctx context.Context) error
-	GetTraefikStatus(ctx context.Context) (*TraefikStatus, error)
+type CertificateManager interface {
+	EnsureClusterIssuer(ctx context.Context, email string, cloudflareToken string) error
 }
 
-type TraefikStatus struct {
-	Ready    bool   `json:"ready"`
-	PodName  string `json:"pod_name"`
-	Restarts int32  `json:"restarts"`
-	Age      string `json:"age"`
+type MetalLBManager interface {
+	EnsureMetalLB(ctx context.Context) error
+	ConfigureMetalLB(ctx context.Context, ipRange string) error
+	GetSuggestedIPRange(ctx context.Context) (string, error)
 }
 
 // HelmInspector provides information about Helm releases.
@@ -97,17 +93,23 @@ type DatabaseManager interface {
 }
 
 // IngressManager handles domain routing and TLS.
-type IngressManager interface {
-	CreateIngress(ctx context.Context, domain *model.Domain, app *model.Application) error
-	UpdateIngress(ctx context.Context, domain *model.Domain, app *model.Application) error
-	DeleteIngress(ctx context.Context, domain *model.Domain) error
-	DeleteIngressByName(ctx context.Context, app *model.Application, name string) error
-	IngressName(app *model.Application, host string) string
-	LegacyIngressName(app *model.Application, host string) string
-	GetIngressStatus(ctx context.Context, domain *model.Domain, app *model.Application) (*IngressStatus, error)
+type RouteManager interface {
+	// Gestión de Rutas de Aplicación
+	CreateRoute(ctx context.Context, domain *model.Domain, app *model.Application) error
+	UpdateRoute(ctx context.Context, domain *model.Domain, app *model.Application) error
+	DeleteRoute(ctx context.Context, domain *model.Domain) error
+	DeleteRouteByName(ctx context.Context, app *model.Application, name string) error
+
+	// Helpers de Identificación
+	RouteName(app *model.Application, host string) string
+
+	// Estado y Seguridad
+	GetRouteStatus(ctx context.Context, domain *model.Domain, app *model.Application) (*RouteStatus, error)
 	GetCertExpiry(ctx context.Context, domain *model.Domain, app *model.Application) (*time.Time, error)
-	EnsurePanelIngress(ctx context.Context, domain, httpsEmail string) error
-	DeletePanelIngress(ctx context.Context) error
+
+	// Gestión del Panel de Control
+	EnsurePanelRoute(ctx context.Context, domain string) error
+	DeletePanelRoute(ctx context.Context) error
 }
 
 // StorageManager handles persistent volumes.
@@ -177,7 +179,7 @@ type ClusterTopology struct {
 	Deployments []TopologyDeployment `json:"deployments"`
 	Pods        []TopologyPod        `json:"pods"`
 	Services    []TopologyService    `json:"services"`
-	Ingresses   []TopologyIngress    `json:"ingresses"`
+	Routes      []TopologyRoute      `json:"routes"`
 }
 
 type TopologyNode struct {
@@ -214,12 +216,18 @@ type TopologyService struct {
 	AppID     string `json:"app_id,omitempty"`
 }
 
-type TopologyIngress struct {
-	Name      string `json:"name"`
-	Namespace string `json:"namespace"`
-	Host      string `json:"host"`
-	Service   string `json:"service"`
-	AppID     string `json:"app_id,omitempty"`
+type TopologyRoute struct {
+	Name      string   `json:"name"`
+	Namespace string   `json:"namespace"`
+	Hosts     []string `json:"hosts"`
+	Gateway   string   `json:"gateway"` // Nombre del Gateway al que pertenece
+	Status    string   `json:"status"`  // "Accepted", "Programmed", "Pending"
+}
+
+type RouteStatus struct {
+	Ready   bool
+	Message string
+	IP      string // IP pública asignada por el Gateway
 }
 
 // LogStreamer provides real-time log streaming.

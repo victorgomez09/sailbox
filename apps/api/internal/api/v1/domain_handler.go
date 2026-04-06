@@ -96,7 +96,7 @@ func (h *DomainHandler) Generate(c *gin.Context) {
 		httputil.RespondError(c, apierr.ErrForbidden.WithDetail("access denied"))
 		return
 	}
-	domain, err := h.svc.GenerateTraefikDomain(c.Request.Context(), appID)
+	domain, err := h.svc.GenerateAutoDomain(c.Request.Context(), appID)
 	if err != nil {
 		httputil.RespondError(c, apierr.ErrBadRequest.WithDetail(err.Error()))
 		return

@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import {
   Activity,
   Box,
@@ -1752,7 +1752,7 @@ function ClusterHealthTab() {
           {stats.unbound_pvcs > 0 && stats.unbound_pvc_names?.length > 0 && (
             <div className="border-t px-3 py-2">
               <div className="max-h-24 overflow-y-auto space-y-0.5">
-                {(stats.unbound_pvc_names ?? []).map((name) => (
+                {(stats.unbound_pvc_names ?? []).map((name: string) => (
                   <p key={name} className="font-mono text-xs text-muted-foreground">
                     {name}
                   </p>

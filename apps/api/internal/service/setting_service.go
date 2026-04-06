@@ -24,6 +24,22 @@ func NewSettingService(s store.Store, orch orchestrator.Orchestrator, logger *sl
 
 // InitDefaults runs on server startup. Detects K3s node IP and sets default base domain.
 func (s *SettingService) InitDefaults(ctx context.Context) error {
+	// 1. Verificar si ya tenemos un email de HTTPS y asegurar el ClusterIssuer
+	// Esto corrige el error "IssuerNotFound" si el servidor se reinicia o el recurso se borra.
+	email, _ := s.store.Settings().Get(ctx, model.SettingHTTPSEmail)
+	if email != "" {
+		cfToken, _ := s.store.Settings().Get(ctx, "cloudflare_token")
+		if err := s.orch.EnsureClusterIssuer(ctx, email, cfToken); err != nil {
+			s.logger.Warn("failed to ensure ClusterIssuer on startup", slog.Any("error", err))
+		}
+	}
+
+	// 2. Asegurar configuración de MetalLB
+	ipRange, _ := s.store.Settings().Get(ctx, "network_ip_range")
+	if ipRange != "" {
+		_ = s.orch.ConfigureMetalLB(ctx, ipRange)
+	}
+
 	done, _ := s.store.Settings().Get(ctx, model.SettingSetupDone)
 	if done == "true" {
 		return nil
@@ -119,6 +135,12 @@ func (s *SettingService) Set(ctx context.Context, key, value string) error {
 			s.logger.Warn("HTTPS email saved but not applied", slog.Any("error", err))
 			return fmt.Errorf("setting saved, but HTTPS config not applied: %w", err)
 		}
+	case "cloudflare_token":
+		email, _ := s.store.Settings().Get(ctx, model.SettingHTTPSEmail)
+		if err := s.orch.EnsureClusterIssuer(ctx, email, value); err != nil {
+			s.logger.Warn("Cloudflare token saved but issuer not updated", slog.Any("error", err))
+			return fmt.Errorf("setting saved, but issuer not updated: %w", err)
+		}
 	}
 
 	return nil
@@ -127,20 +149,20 @@ func (s *SettingService) Set(ctx context.Context, key, value string) error {
 // applyPanelDomain creates or removes the Traefik IngressRoute for the panel.
 func (s *SettingService) applyPanelDomain(ctx context.Context, domain string) error {
 	if domain == "" {
-		return s.orch.DeletePanelIngress(ctx)
+		return s.orch.DeletePanelRoute(ctx)
 	}
-	httpsEmail, _ := s.store.Settings().Get(ctx, model.SettingHTTPSEmail)
-	return s.orch.EnsurePanelIngress(ctx, domain, httpsEmail)
+	return s.orch.EnsurePanelRoute(ctx, domain)
 }
 
 // applyHTTPSEmail updates the Traefik ACME certificate resolver email.
 func (s *SettingService) applyHTTPSEmail(ctx context.Context, email string) error {
-	// Also re-apply panel ingress if a domain is configured, so TLS picks up the email
-	panelDomain, _ := s.store.Settings().Get(ctx, model.SettingPanelDomain)
-	if panelDomain != "" {
-		return s.orch.EnsurePanelIngress(ctx, panelDomain, email)
+	cfToken, _ := s.store.Settings().Get(ctx, "cloudflare_token")
+	if email == "" {
+		return nil
 	}
-	return nil
+
+	// Configure cert-manager ClusterIssuer
+	return s.orch.EnsureClusterIssuer(ctx, email, cfToken)
 }
 
 // SMTPConfig holds SMTP mail server settings.
