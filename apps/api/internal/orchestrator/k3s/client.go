@@ -95,16 +95,20 @@ func New(cfg config.K8sConfig, logger *slog.Logger) (*Orchestrator, error) {
 	if err := orch.ensureEnvoyGateway(); err != nil {
 		return nil, fmt.Errorf("failed to ensure envoy: %w", err)
 	}
+
+	// 1. Configurar HA (DaemonSet) ANTES de crear el Gateway
+	if err := orch.configureHighAvailability(); err != nil {
+		orch.logger.Warn("No se pudo aplicar la configuración de HA, usando valores por defecto", "error", err)
+	}
+
+	// 2. Crear el Gateway (ahora ya sabe que debe ser DaemonSet)
 	if err := orch.ensureGlobalGateway(); err != nil {
 		return nil, fmt.Errorf("failed to ensure HA gateway: %w", err)
 	}
+
+	// 3. Asegurar MetalLB para la IP Virtual
 	if err := orch.EnsureMetalLB(context.Background()); err != nil {
 		logger.Warn("Failed to ensure MetalLB installation", "error", err)
-	}
-
-	if err := orch.configureHighAvailability(); err != nil {
-		orch.logger.Warn("No se pudo aplicar la configuración de HA, usando valores por defecto", "error", err)
-		return nil, err
 	}
 
 	logger.Info("connected to K3s cluster with Gateway API ready")
@@ -222,6 +226,11 @@ metadata:
   name: sailbox-gateway-class
 spec:
   controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: sailbox-proxy-config
+    namespace: envoy-gateway-system
 `
 	if err := o.applyManifest(gatewayClass); err != nil {
 		return fmt.Errorf("failed to apply GatewayClass: %w", err)
@@ -282,17 +291,29 @@ spec:
   provider:
     type: Kubernetes
     kubernetes:
-      envoyDeployment:
-        strategy:
-          type: DaemonSet
+      envoyProxy:
+        kind: DaemonSet
+      envoyDaemonSet:
+        pod:
+          spec:
+            hostNetwork: true
+            dnsPolicy: ClusterFirstWithHostNet
+            tolerations:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+                effect: NoSchedule
+              - key: node-role.kubernetes.io/master
+                operator: Exists
+                effect: NoSchedule
         container:
-          resources:
-            limits:
-              cpu: 500m
-              memory: 512Mi
-            requests:
-              cpu: 100m
-              memory: 128Mi
+          securityContext:
+            capabilities:
+              add:
+                - NET_BIND_SERVICE
+            runAsUser: 0
+      envoyService:
+        type: LoadBalancer
+        externalTrafficPolicy: Local
 `
 	return o.applyManifest(haConfig)
 }
@@ -307,12 +328,6 @@ kind: Gateway
 metadata:
   name: sailbox-gateway
   namespace: envoy-gateway-system
-  annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-    gateway.envoyproxy.io/extension-types: envoyproxy
-    gateway.envoyproxy.io/extension-ref-name: sailbox-proxy-config
-    gateway.envoyproxy.io/extension-ref-group: gateway.envoyproxy.io
-    gateway.envoyproxy.io/extension-ref-kind: EnvoyProxy
 spec:
   gatewayClassName: sailbox-gateway-class
   listeners:

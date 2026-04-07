@@ -40,31 +40,36 @@ func (s *SettingService) InitDefaults(ctx context.Context) error {
 		_ = s.orch.ConfigureMetalLB(ctx, ipRange)
 	}
 
-	done, _ := s.store.Settings().Get(ctx, model.SettingSetupDone)
-	if done == "true" {
-		return nil
-	}
-
-	// Try to get IP from K3s control-plane node first
-	ip := s.detectK3sNodeIP(ctx)
+	// 3. Detectar IP del servidor si no está configurada
+	// Esto asegura que al "levantar la aplicación" se asigne una IP automáticamente si falta.
+	ip, _ := s.store.Settings().Get(ctx, model.SettingServerIP)
 	if ip == "" {
-		// Fallback to local network detection
-		ip = detectLocalIP()
-	}
+		// Primero intentamos obtener la IP del nodo de K3s (ideal para VPS/Producción)
+		ip = s.detectK3sNodeIP(ctx)
+		if ip == "" {
+			// Fallback a detección de red local o localhost (ideal para Desarrollo)
+			ip = detectLocalIP()
+		}
 
-	if ip != "" {
-		_ = s.store.Settings().Set(ctx, model.SettingServerIP, ip)
-		s.logger.Info("detected server IP", slog.String("ip", ip))
+		if ip != "" {
+			_ = s.store.Settings().Set(ctx, model.SettingServerIP, ip)
+			s.logger.Info("automatically assigned server IP", slog.String("ip", ip))
 
-		existing, _ := s.store.Settings().Get(ctx, model.SettingBaseDomain)
-		if existing == "" {
-			baseDomain := fmt.Sprintf("%s.sslip.io", ip)
-			_ = s.store.Settings().Set(ctx, model.SettingBaseDomain, baseDomain)
-			s.logger.Info("set default base domain", slog.String("domain", baseDomain))
+			// Si no hay dominio base, asignar uno automático usando sslip.io (funciona con 127.0.0.1)
+			existingDomain, _ := s.store.Settings().Get(ctx, model.SettingBaseDomain)
+			if existingDomain == "" {
+				baseDomain := fmt.Sprintf("%s.sslip.io", ip)
+				_ = s.store.Settings().Set(ctx, model.SettingBaseDomain, baseDomain)
+				s.logger.Info("set default base domain", slog.String("domain", baseDomain))
+			}
 		}
 	}
 
-	_ = s.store.Settings().Set(ctx, model.SettingSetupDone, "true")
+	// Marcar setup como completado si es el primer arranque
+	if done, _ := s.store.Settings().Get(ctx, model.SettingSetupDone); done != "true" {
+		_ = s.store.Settings().Set(ctx, model.SettingSetupDone, "true")
+	}
+
 	return nil
 }
 
