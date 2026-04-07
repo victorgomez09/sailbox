@@ -50,3 +50,31 @@ Este roadmap detalla la evolución del fork de Sailbox hacia una plataforma PaaS
 - [ ] **5.1 Métricas de Red en Tiempo Real:** Visualizar RPS (Requests por segundo), Latencia P99 y códigos de error (4xx, 5xx) por cada App.
 - [ ] **5.2 Logs Centralizados de Construcción:** Sistema de streaming de logs de Buildah hacia la interfaz de usuario mediante WebSockets.
 - [ ] **5.3 Alertas Inteligentes:** Notificaciones vía Webhook/Telegram cuando un despliegue falla o un límite de cuota es alcanzado.
+
+# Esquema
+                        ┌─────────────────────────────┐
+                        │    DNS Wildcard              │
+                        │  *.paas.empresa.com → LB IP  │
+                        └──────────────┬──────────────┘
+                                       │
+                        ┌──────────────▼──────────────┐
+                        │   Cloud/MetalLB External     │
+                        │   Load Balancer (L4)         │
+                        └──────────┬──────┬───────────┘
+                                   │      │
+               ┌───────────────────▼──┐ ┌─▼──────────────────────┐
+               │  Gateway Pod - Nodo1 │ │  Gateway Pod - Nodo2    │
+               │   (Envoy Gateway)    │ │   (Envoy Gateway)       │
+               └───────────┬──────────┘ └──────────┬─────────────┘
+                           │                        │
+          ┌────────────────┴────────────────────────┘
+          │
+    ┌─────────▼──────────────────────────────────────────────┐
+    │                  Kubernetes Cluster                      │
+    │                                                          │
+    │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐     │
+    │  │  NS: app-a  │  │  NS: app-b  │  │  NS: app-c  │     │
+    │  │  app + db   │  │  app + db   │  │  app + db   │     │
+    │  └─────────────┘  └─────────────┘  └─────────────┘     │
+    └──────────────────────────────────────────────────────────┘
+
